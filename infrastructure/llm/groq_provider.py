@@ -7,10 +7,10 @@ from langchain_classic.chains import create_history_aware_retriever, create_retr
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder, PromptTemplate
 from langchain_classic.retrievers import EnsembleRetriever
+from sentence_transformers import CrossEncoder
 from core.interfaces.llm_provider import LLMProvider
 from core.domain.models import ChatResponse, SourceDocument, Quiz, QuizQuestion
 from config.settings import settings
-from core.services.router import SemanticRouter # We will move router later or keep it in src for now
 
 logger = logging.getLogger(__name__)
 
@@ -29,17 +29,13 @@ class GroqProvider(LLMProvider):
             model_name=settings.MODEL_NAME,
             temperature=0.1
         )
-        self.router = SemanticRouter()
+        self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
     def generate_response(self, query: str, context: List[Any], chat_history: List[Any], route: str = None) -> ChatResponse:
         try:
             # 1. Routing
             if not route:
-                try:
-                    route = self.router.route(query)
-                except Exception as e:
-                    logger.error(f"Routing error: {e}")
-                    route = "PRECISION"
+                route = "PRECISION"
             
             # 2. Chat Mode
             if route == "CHAT":
@@ -58,39 +54,56 @@ Pregunta: {query}""")
             if not vectorstore or not bm25_retriever:
                  return ChatResponse(answer="Por favor, carga documentos primero.", route="ERROR")
 
-            faiss_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 4})
+            faiss_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 10})
             ensemble_retriever = EnsembleRetriever(
                 retrievers=[bm25_retriever, faiss_retriever],
                 weights=[0.5, 0.5]
             )
 
+            # Obtén los documentos iniciales
+            initial_docs = ensemble_retriever.invoke(query)
+
+            # Reranking
+            pairs = [[query, doc.page_content] for doc in initial_docs]
+            scores = self.reranker.predict(pairs)
+            
+            # Zip docs with scores and sort
+            scored_docs = sorted(zip(initial_docs, scores), key=lambda x: x[1], reverse=True)
+            
+            # Select Top 5
+            top_docs = [doc for doc, score in scored_docs[:5]]
+
             # Select Prompt
             if route == "ANALYSIS":
-                sys_prompt = """Eres un Auditor de Calidad ISO 9001 estricto.
-Extrae evidencia concreta. Si no está explícito, di 'No hay información suficiente'.
-Cita el documento y sección usando referencias numéricas [1].
+                sys_prompt = """Eres un Auditor de Calidad ISO 9001 estricto y profesional.
+Tu objetivo es analizar el contexto proporcionado y extraer evidencia concreta para responder a la consulta.
+
+REGLAS DE CITA ESTRICTAS:
+1. CADA afirmación o dato extraído del texto DEBE llevar una cita numérica [X] INMEDIATAMENTE al final de la frase correspondiente.
+2. NO coloques las citas al final del párrafo, deben ser precisas por frase.
+3. Si una frase se basa en múltiples fuentes, usa el formato [1][2].
+4. NO generes una sección de 'Fuentes', 'Referencias' o 'Bibliografía' al final.
+5. Si la información no está explícita en el contexto, indica claramente 'No hay información suficiente en los documentos proporcionados'.
+
 Contexto: {context}"""
             elif route == "WALKTHROUGH":
                 sys_prompt = """Eres un Instructor de Laboratorio.
 Guía paso a paso. Si dice 'Empezar', da el Paso 1.
 Contexto: {context}"""
             else: # PRECISION
-                sys_prompt = """Eres un Asistente Técnico estricto.
-Responde basándote ÚNICAMENTE en el contexto. Sé breve.
-Cita usando referencias numéricas [1].
+                sys_prompt = """Eres un Asistente Técnico estricto y directo.
+Responde basándote ÚNICAMENTE en el contexto proporcionado.
+
+REGLAS DE CITA ESTRICTAS:
+1. Sé extremadamente breve y conciso.
+2. CADA afirmación DEBE llevar su cita numérica [X] INMEDIATAMENTE al final de la frase.
+3. Si hay múltiples fuentes, usa [1][2].
+4. NO generes listas de fuentes o bibliografía al final.
+5. Si no encuentras la respuesta exacta, di 'No se encuentra en el contexto'.
+
 Contexto: {context}"""
 
             # Chains
-            contextualize_q_prompt = ChatPromptTemplate.from_messages([
-                ("system", "Reformulate the question to be standalone given the chat history."),
-                MessagesPlaceholder("chat_history"),
-                ("human", "{input}"),
-            ])
-            
-            history_aware_retriever = create_history_aware_retriever(
-                self.llm_rag, ensemble_retriever, contextualize_q_prompt
-            )
-            
             qa_prompt = ChatPromptTemplate.from_messages([
                 ("system", sys_prompt),
                 MessagesPlaceholder("chat_history"),
@@ -106,13 +119,15 @@ Contexto: {context}"""
                 self.llm_rag, qa_prompt, document_prompt=document_prompt
             )
             
-            rag_chain = create_retrieval_chain(history_aware_retriever, question_answer_chain)
-            
-            response = rag_chain.invoke({"input": query, "chat_history": chat_history})
+            response_message = question_answer_chain.invoke({
+                "input": query, 
+                "chat_history": chat_history,
+                "context": top_docs
+            })
             
             # Process Sources
             source_docs = []
-            for doc in response.get("context", []):
+            for doc in top_docs:
                 source_docs.append(SourceDocument(
                     page_content=doc.page_content,
                     metadata=doc.metadata,
@@ -121,7 +136,7 @@ Contexto: {context}"""
                 ))
 
             return ChatResponse(
-                answer=response["answer"],
+                answer=response_message.content if hasattr(response_message, 'content') else str(response_message),
                 source_documents=source_docs,
                 route=route
             )

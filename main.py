@@ -7,6 +7,8 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 from config.settings import settings
 from infrastructure.llm.groq_provider import GroqProvider
 from infrastructure.vector_store.faiss_repository import FAISSRepository
+from infrastructure.files.loader import DocumentLoader
+from infrastructure.ai.semantic_router import SemanticRouter
 from core.services.chat_service import ChatService
 from core.services.quiz_service import QuizService
 from app.ui.views.chat_view import render_chat_view
@@ -20,7 +22,15 @@ st.set_page_config(page_title="Asistente ISO 9001", page_icon="🧪", layout="wi
 def get_services():
     llm_provider = GroqProvider()
     vector_store_repo = FAISSRepository()
-    chat_service = ChatService(llm_provider, vector_store_repo)
+    document_loader = DocumentLoader()
+    router_repo = SemanticRouter()
+    
+    chat_service = ChatService(
+        llm_provider=llm_provider, 
+        vector_store_repo=vector_store_repo,
+        document_loader=document_loader,
+        router_repo=router_repo
+    )
     quiz_service = QuizService(llm_provider, chat_service)
     
     # Load existing DB if available
