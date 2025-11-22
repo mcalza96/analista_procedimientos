@@ -1,28 +1,14 @@
-# Frontend
-streamlit>=1.33.0
+llama-parse
+sentence-transformers
+langchain-groq
+streamlit
+faiss-cpu
+rank_bm25
+pypdf
+python-dotenv
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-huggingface
 
-# Orquestación y Framework
-langchain>=0.1.0
-langchain-community>=0.0.10
-langchain-core>=0.1.0
-langchain-text-splitters>=0.0.1
-
-# LLM
-langchain-groq>=0.0.1
-
-# Vector Store (Seleccionado: FAISS)
-faiss-cpu>=1.7.4
-sentence-transformers>=2.2.2
-
-# Procesamiento de Documentos
-pypdf>=3.17.0
-llama-parse>=0.1.0
-
-# Utilidades
-python-dotenv>=1.0.0
-tiktoken>=0.5.0
-rank_bm25>=0.2.2
-gTTS>=2.5.1
-streamlit-pdf-viewer>=0.0.18
-langchain-huggingface>=0.0.1
-python-multipart>=0.0.5

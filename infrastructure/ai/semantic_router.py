@@ -2,10 +2,11 @@ import logging
 from langchain_groq import ChatGroq
 from langchain_core.prompts import PromptTemplate
 from config.settings import settings
+from core.interfaces.router import RouterRepository
 
 logger = logging.getLogger(__name__)
 
-class SemanticRouter:
+class SemanticRouter(RouterRepository):
     def __init__(self):
         try:
             if not settings.GROQ_API_KEY:
@@ -58,7 +59,7 @@ Clasificación:"""
             logger.error(f"❌ Error inicializando SemanticRouter: {e}")
             raise
     
-    def route(self, query: str) -> str:
+    def route_query(self, query: str) -> str:
         try:
             if not query or not isinstance(query, str):
                 return "PRECISION"

@@ -1,17 +1,17 @@
 import logging
 import os
-from typing import List
+from typing import List, Any
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from llama_parse import LlamaParse
 from config.settings import settings
+from core.interfaces.document_loader import DocumentLoaderRepository
 
 logger = logging.getLogger(__name__)
 
-class DocumentLoader:
-    @staticmethod
-    def process_documents(pdf_paths: List[str]) -> List[Document]:
+class DocumentLoader(DocumentLoaderRepository):
+    def load_documents(self, pdf_paths: List[str]) -> List[Document]:
         all_chunks: List[Document] = []
         
         # Configurar splitter

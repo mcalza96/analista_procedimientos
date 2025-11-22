@@ -11,7 +11,6 @@ from sentence_transformers import CrossEncoder
 from core.interfaces.llm_provider import LLMProvider
 from core.domain.models import ChatResponse, SourceDocument, Quiz, QuizQuestion
 from config.settings import settings
-from core.services.router import SemanticRouter # We will move router later or keep it in src for now
 
 logger = logging.getLogger(__name__)
 
@@ -30,18 +29,13 @@ class GroqProvider(LLMProvider):
             model_name=settings.MODEL_NAME,
             temperature=0.1
         )
-        self.router = SemanticRouter()
         self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
     def generate_response(self, query: str, context: List[Any], chat_history: List[Any], route: str = None) -> ChatResponse:
         try:
             # 1. Routing
             if not route:
-                try:
-                    route = self.router.route(query)
-                except Exception as e:
-                    logger.error(f"Routing error: {e}")
-                    route = "PRECISION"
+                route = "PRECISION"
             
             # 2. Chat Mode
             if route == "CHAT":
