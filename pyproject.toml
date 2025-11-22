@@ -1,0 +1,48 @@
+[tool.poetry]
+name = "asistente-lab-iso"
+version = "0.1.0"
+description = "Asistente de Laboratorio ISO - Refactorizado"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "app"}]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+langchain = "^0.3.0"
+langchain-community = "^0.3.0"
+langchain-groq = "^0.2.0"
+langchain-openai = "^0.2.0"
+streamlit = "^1.39.0"
+faiss-cpu = "^1.9.0"
+sentence-transformers = "^3.2.0"
+rank-bm25 = "^0.2.2"
+pdfplumber = "^0.11.0"
+python-docx = "^1.1.0"
+openpyxl = "^3.1.0"
+python-pptx = "^1.0.0"
+llama-parse = "^0.5.0"
+tiktoken = "^0.8.0"
+pydantic = "^2.9.0"
+pydantic-settings = "^2.6.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+ruff = "^0.7.0"
+mypy = "^1.13.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = []
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+strict = false

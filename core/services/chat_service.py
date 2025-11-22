@@ -1,12 +1,12 @@
 from typing import List, Any, Tuple, Optional, Generator
 from langchain_classic.retrievers import EnsembleRetriever
-# from sentence_transformers import CrossEncoder
+from sentence_transformers import CrossEncoder
 from langchain_core.documents import Document
 from core.interfaces.llm_provider import LLMProvider
 from core.interfaces.vector_store import VectorStoreRepository
 from core.interfaces.document_loader import DocumentLoaderRepository
 from core.interfaces.router import RouterRepository
-from core.domain.models import ChatResponse, SourceDocument
+from core.domain.models import ChatResponse, SourceDocument, LLMProviderError
 from core.services.prompt_manager import PromptManager
 import logging
 
@@ -30,8 +30,12 @@ class ChatService:
         self.router_repo = router_repo
         self.vector_store = None
         self.bm25_retriever = None
-        # Desactivamos Reranker por problemas con idioma español en modelo actual
-        # self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        # Inicializamos Reranker Multilingüe Ligero
+        try:
+            self.reranker = CrossEncoder('cross-encoder/mmarco-mMiniLM-v2-L12-H384-v1')
+        except Exception as e:
+            logger.warning(f"Error cargando reranker: {e}")
+            self.reranker = None
 
     def process_uploaded_files(self, file_paths: List[str]) -> None:
         """Procesa archivos subidos y crea la base de datos vectorial."""
@@ -44,14 +48,44 @@ class ChatService:
 
     def _rerank_documents(self, query: str, docs: List[Document]) -> List[Document]:
         """
-        Passthrough (Reranker deshabilitado).
+        Reordena los documentos recuperados usando un CrossEncoder Multilingüe.
+        
+        Args:
+            query: La consulta del usuario.
+            docs: Lista de documentos recuperados inicialmente.
+            
+        Returns:
+            List[Document]: Top 5 documentos más relevantes reordenados.
         """
         if not docs:
             return []
             
-        # Retornamos los top 15 documentos del Ensemble directamente
-        # El Ensemble ya combina BM25 (palabras clave) y Vector (semántico)
-        return docs[:15]
+        # Eliminar duplicados basados en contenido antes del reranking
+        unique_docs = []
+        seen_content = set()
+        for doc in docs:
+            if doc.page_content not in seen_content:
+                unique_docs.append(doc)
+                seen_content.add(doc.page_content)
+        
+        if not unique_docs or not self.reranker:
+            return unique_docs[:5]
+
+        # Preparar pares para el CrossEncoder
+        pairs = [[query, doc.page_content] for doc in unique_docs]
+        
+        # Predecir scores
+        scores = self.reranker.predict(pairs)
+        
+        # Asignar scores a metadata y ordenar
+        for doc, score in zip(unique_docs, scores):
+            doc.metadata['score'] = float(score)
+
+        # Ordenar por score descendente
+        scored_docs = sorted(unique_docs, key=lambda x: x.metadata.get('score', 0), reverse=True)
+        
+        # Retornar top 5
+        return scored_docs[:5]
 
     def _retrieve_documents(self, query: str) -> Tuple[List[SourceDocument], str]:
         """
@@ -133,6 +167,10 @@ class ChatService:
                 source_documents=source_docs,
                 route=route
             )
+        
+        except LLMProviderError as e:
+            logger.error(f"LLM Provider Error: {e}")
+            return ChatResponse(answer="Lo siento, hubo un problema de comunicación con el modelo de IA. Por favor intenta de nuevo más tarde.", route="ERROR")
             
         except Exception as e:
             logger.error(f"Error en ChatService.get_response: {e}")
@@ -178,6 +216,11 @@ class ChatService:
 
             # Paso 5: Return Generator and Sources
             return generator, source_docs, route
+        
+        except LLMProviderError as e:
+            logger.error(f"LLM Provider Error: {e}")
+            def error_gen(): yield "Lo siento, hubo un problema de comunicación con el modelo de IA. Por favor intenta de nuevo más tarde."
+            return error_gen(), [], "ERROR"
             
         except Exception as e:
             logger.error(f"Error en ChatService.get_streaming_response: {e}")

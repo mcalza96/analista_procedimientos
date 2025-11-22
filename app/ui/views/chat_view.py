@@ -12,10 +12,10 @@ def render_chat_view(chat_service: ChatService):
 
     for i, message in enumerate(st.session_state.chat_history):
         if isinstance(message, HumanMessage):
-            with st.chat_message("user"):
+            with st.chat_message("user", avatar="👤"):
                 st.markdown(message.content)
         elif isinstance(message, AIMessage):
-            with st.chat_message("assistant"):
+            with st.chat_message("assistant", avatar="🤖"):
                 st.markdown(message.content)
                 if hasattr(message, "additional_kwargs") and "sources" in message.additional_kwargs:
                      display_sources(message.additional_kwargs["sources"], message.content)
@@ -41,13 +41,16 @@ def render_chat_view(chat_service: ChatService):
 
     if prompt := st.chat_input("¿En qué puedo ayudarte hoy?"):
         st.session_state.chat_history.append(HumanMessage(content=prompt))
-        with st.chat_message("user"):
+        with st.chat_message("user", avatar="👤"):
             st.markdown(prompt)
 
-        with st.chat_message("assistant"):
+        with st.chat_message("assistant", avatar="🤖"):
             # Placeholder for status
             status_placeholder = st.empty()
-            with status_placeholder.status("Analizando documentos...", expanded=True) as status:
+            full_response = ""
+            source_docs = []
+            
+            with status_placeholder.status("Consultando base de conocimiento...", expanded=True) as status:
                 history_for_chain = st.session_state.chat_history[:-1]
                 # Use streaming response
                 response_generator, source_docs, route = chat_service.get_streaming_response(prompt, history_for_chain)

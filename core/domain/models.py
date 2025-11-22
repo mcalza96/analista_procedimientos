@@ -27,3 +27,7 @@ class QuizQuestion:
 class Quiz:
     topic: str
     questions: List[QuizQuestion]
+
+class LLMProviderError(Exception):
+    """Excepción personalizada para errores del proveedor de LLM."""
+    pass

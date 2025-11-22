@@ -50,8 +50,8 @@ def debug_retrieval():
             print(">>> TARGET DOC WAS NOT RETRIEVED <<<")
 
         # Rerank
-        print("Reranking...")
-        reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        print("Reranking with BAAI/bge-reranker-v2-m3...")
+        reranker = CrossEncoder('BAAI/bge-reranker-v2-m3', max_length=512)
         pairs = [[query, doc.page_content] for doc in all_docs]
         scores = reranker.predict(pairs)
         

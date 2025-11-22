@@ -2,6 +2,7 @@ from typing import Generator
 import logging
 from langchain_groq import ChatGroq
 from core.interfaces.llm_provider import LLMProvider
+from core.domain.models import LLMProviderError
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -30,13 +31,16 @@ class GroqProvider(LLMProvider):
             
         Returns:
             str: La respuesta generada por el modelo.
+            
+        Raises:
+            LLMProviderError: Si ocurre un error durante la generación.
         """
         try:
             response = self.llm.invoke(prompt)
             return str(response.content)
         except Exception as e:
             logger.error(f"Error in generate_response: {e}")
-            return "Error generando respuesta."
+            raise LLMProviderError(f"Error detallado: {str(e)}")
 
     def generate_stream(self, prompt: str) -> Generator[str, None, None]:
         """
@@ -47,6 +51,9 @@ class GroqProvider(LLMProvider):
             
         Yields:
             str: Fragmentos de la respuesta generada.
+            
+        Raises:
+            LLMProviderError: Si ocurre un error durante la generación.
         """
         try:
             for chunk in self.llm.stream(prompt):
@@ -54,4 +61,4 @@ class GroqProvider(LLMProvider):
                     yield str(chunk.content)
         except Exception as e:
             logger.error(f"Error in generate_stream: {e}")
-            yield "Error generando respuesta."
+            raise LLMProviderError(f"Error detallado: {str(e)}")
