@@ -1,10 +1,10 @@
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 @dataclass
 class SourceDocument:
     page_content: str
-    metadata: dict
+    metadata: Dict[str, Any]
     source_file: str = ""
     page_number: int = 0
 

@@ -7,14 +7,10 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.retrievers import BM25Retriever
-try:
-    from langchain.retrievers import ParentDocumentRetriever
-    from langchain.storage import LocalFileStore
-    from langchain.storage._lc_store import create_kv_docstore
-except ImportError:
-    from langchain_classic.retrievers import ParentDocumentRetriever
-    from langchain_classic.storage import LocalFileStore
-    from langchain_classic.storage._lc_store import create_kv_docstore
+# Updated imports for langchain compatibility
+from langchain_classic.retrievers import ParentDocumentRetriever
+from langchain_classic.storage import LocalFileStore
+from langchain_classic.storage._lc_store import create_kv_docstore
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from core.interfaces.vector_store import VectorStoreRepository
@@ -41,12 +37,19 @@ class FAISSRepository(VectorStoreRepository):
             
         Returns:
             Tuple[ParentDocumentRetriever, BM25Retriever]: Los retrievers configurados.
+            
+        Raises:
+            ValueError: Si el directorio de sesión no existe.
+            RuntimeError: Si hay un error crítico cargando el índice.
         """
-        try:
-            session_dir = Path(session_path)
-            docstore_path = session_dir / "doc_store"
-            vectorstore_path = session_dir / "vector_store"
+        session_dir = Path(session_path)
+        if not session_dir.exists():
+            raise ValueError(f"El directorio de sesión no existe: {session_path}")
 
+        docstore_path = session_dir / "doc_store"
+        vectorstore_path = session_dir / "vector_store"
+
+        try:
             # 1. Configurar Almacenamiento de Documentos (Padres)
             fs = LocalFileStore(str(docstore_path))
             store = create_kv_docstore(fs)
@@ -58,6 +61,9 @@ class FAISSRepository(VectorStoreRepository):
             # 3. Cargar o Inicializar Vector Store (FAISS)
             if vectorstore_path.exists() and (vectorstore_path / "index.faiss").exists():
                 logger.info(f"Cargando índice FAISS existente desde {vectorstore_path}...")
+                # ADVERTENCIA DE SEGURIDAD: allow_dangerous_deserialization=True es necesario para cargar
+                # archivos pickle locales generados por FAISS. Solo debe usarse con índices confiables
+                # generados internamente por esta misma aplicación.
                 vector_store = FAISS.load_local(
                     str(vectorstore_path), 
                     self.embeddings, 
@@ -75,11 +81,14 @@ class FAISSRepository(VectorStoreRepository):
                 )
 
             # 4. Configurar ParentDocumentRetriever
+            # Aumentamos search_kwargs k=60 para traer más candidatos iniciales
+            # Esto es crucial para preguntas complejas que requieren datos de múltiples secciones
             retriever = ParentDocumentRetriever(
                 vectorstore=vector_store,
                 docstore=store,
                 child_splitter=child_splitter,
                 parent_splitter=parent_splitter,
+                search_kwargs={"k": 60}
             )
 
             # 5. Configurar BM25 Retriever
@@ -88,8 +97,8 @@ class FAISSRepository(VectorStoreRepository):
             return retriever, bm25_retriever
 
         except Exception as e:
-            logger.error(f"Error obteniendo Vector DB para sesión {session_path}: {e}")
-            raise e
+            logger.error(f"Error crítico obteniendo Vector DB para sesión {session_path}: {e}")
+            raise RuntimeError(f"No se pudo inicializar la base de datos vectorial: {e}")
 
     def add_documents(self, session_path: str, new_documents: List[Document]) -> Tuple[Any, Any]:
         """
@@ -140,7 +149,7 @@ class FAISSRepository(VectorStoreRepository):
             
             if stored_docs:
                 bm25 = BM25Retriever.from_documents(stored_docs)
-                bm25.k = 5
+                bm25.k = 30  # Aumentamos de 10 a 30 para capturar más palabras clave
                 return bm25
             return None
         except Exception as e:

@@ -44,12 +44,52 @@ class SessionManager:
         metadata = {
             "id": session_id,
             "name": name,
-            "created_at": datetime.now().isoformat()
+            "created_at": datetime.now().isoformat(),
+            "files": []
         }
         
         self._save_metadata(session_path, metadata)
             
         return session_id
+
+    def add_files_to_session(self, session_id: str, filenames: List[str]):
+        """
+        Registra archivos agregados a la sesión.
+        
+        Args:
+            session_id (str): ID de la sesión.
+            filenames (List[str]): Lista de nombres de archivos.
+        """
+        session_path = self.base_path / session_id
+        if not session_path.exists():
+            raise ValueError(f"Session {session_id} does not exist")
+            
+        metadata = self._load_metadata(session_path)
+        if metadata:
+            current_files = metadata.get("files", [])
+            # Evitar duplicados
+            for f in filenames:
+                if f not in current_files:
+                    current_files.append(f)
+            metadata["files"] = current_files
+            self._save_metadata(session_path, metadata)
+
+    def get_session_files(self, session_id: str) -> List[str]:
+        """
+        Obtiene la lista de archivos registrados en la sesión.
+        
+        Args:
+            session_id (str): ID de la sesión.
+            
+        Returns:
+            List[str]: Lista de nombres de archivos.
+        """
+        session_path = self.base_path / session_id
+        if not session_path.exists():
+            return []
+            
+        metadata = self._load_metadata(session_path)
+        return metadata.get("files", []) if metadata else []
 
     def list_sessions(self) -> List[Dict[str, Any]]:
         """
@@ -162,3 +202,37 @@ class SessionManager:
                 return json.load(f)
         except Exception:
             return None
+
+    def get_session_name(self, session_id: str) -> str:
+        """
+        Obtiene el nombre de la sesión.
+        
+        Args:
+            session_id (str): ID de la sesión.
+            
+        Returns:
+            str: Nombre de la sesión o "Sesión Desconocida".
+        """
+        session_path = self.base_path / session_id
+        metadata = self._load_metadata(session_path)
+        return metadata.get("name", "Sesión Desconocida") if metadata else "Sesión Desconocida"
+
+    def get_session_date(self, session_id: str) -> str:
+        """
+        Obtiene la fecha de creación de la sesión.
+        
+        Args:
+            session_id (str): ID de la sesión.
+            
+        Returns:
+            str: Fecha formateada o "Desconocida".
+        """
+        session_path = self.base_path / session_id
+        metadata = self._load_metadata(session_path)
+        if metadata and "created_at" in metadata:
+            try:
+                dt = datetime.fromisoformat(metadata["created_at"])
+                return dt.strftime("%Y-%m-%d %H:%M")
+            except ValueError:
+                return metadata["created_at"]
+        return "Desconocida"

@@ -43,83 +43,74 @@ def display_sources(sources, text_content=""):
             except ValueError:
                 pass
 
-    if not relevant_indices and text_content:
-        for i, doc in enumerate(sources):
-            source_name = os.path.basename(doc.metadata.get('source', ''))
-            if source_name in text_content:
-                relevant_indices.add(i)
+    # If no specific citations found, maybe show top 3?
+    # But the requirement is "Clickable Citations".
+    # If text_content is present but no citations, we might want to show the top sources anyway.
     
     if relevant_indices:
         final_sources = [sources[i] for i in sorted(list(relevant_indices))]
     else:
-        final_sources = sources
+        # If no citations, show top 3 as fallback
+        final_sources = sources[:3]
 
     if not final_sources:
         return
 
-    st.markdown("### 📚 Fuentes Utilizadas")
+    st.markdown("### 📚 Fuentes Citadas")
     
-    if len(final_sources) <= 3:
-        cols = st.columns(len(final_sources))
-        for i, (col, doc) in enumerate(zip(cols, final_sources)):
-            with col:
-                try:
-                    original_idx = sources.index(doc) + 1
-                except ValueError:
-                    original_idx = "?"
+    # Source Navigation Bar
+    # We use columns to create a horizontal bar of buttons
+    cols = st.columns(len(final_sources))
+    
+    for i, (col, doc) in enumerate(zip(cols, final_sources)):
+        with col:
+            try:
+                original_idx = sources.index(doc) + 1
+            except ValueError:
+                original_idx = "?"
+            
+            # Handle both dict and object access for metadata
+            metadata = doc.metadata if hasattr(doc, 'metadata') else doc.get('metadata', {})
+            source = os.path.basename(metadata.get('source', 'Desconocido'))
+            page = metadata.get('page', 0) + 1
+            source_file = metadata.get('source_file', '')
+            page_content = doc.page_content if hasattr(doc, 'page_content') else doc.get('page_content', '')
+            
+            # Button/Popover for the source
+            with st.popover(f"📄 [{original_idx}] {source[:15]}...", use_container_width=True):
+                st.markdown(f"**Fuente [{original_idx}]: {source}**")
+                st.caption(f"Página {page}")
                 
-                source = os.path.basename(doc.metadata.get('source', 'Desconocido'))
-                page = doc.metadata.get('page', 0) + 1
-                source_file = doc.metadata.get('source_file', '')
+                tab1, tab2 = st.tabs(["📄 PDF", "📝 Texto"])
                 
-                with st.container(border=True):
-                    st.markdown(f"**[{original_idx}] 📄 {source}**")
-                    st.caption(f"Página {page}")
-                    
-                    popover_key = f"popover_{original_idx}_{i}"
-                    with st.popover("🔍 Ver PDF Completo", use_container_width=True):
-                        st.markdown(f"**Visualizando: {source} (Pág. {page})**")
-                        if source_file:
-                            full_path = os.path.join(settings.TEMP_DOCS_DIR, source_file)
-                            if os.path.exists(full_path):
-                                pdf_viewer(
-                                    full_path, 
-                                    width=700, 
-                                    height=800, 
-                                    pages_to_render=[page], 
-                                    render_text=True,
-                                    key=f"pdf_viewer_{original_idx}_{i}_{page}_{id(doc)}"
-                                )
-                            else:
-                                st.error("Archivo no encontrado.")
-                        
-                    with st.expander("Ver texto extraído"):
-                        st.caption(doc.page_content)
-    else:
-        with st.expander(f"Ver {len(final_sources)} documentos consultados"):
-            for i, doc in enumerate(final_sources):
-                try:
-                    original_idx = sources.index(doc) + 1
-                except ValueError:
-                    original_idx = i + 1
-
-                source = os.path.basename(doc.metadata.get('source', 'Desconocido'))
-                page = doc.metadata.get('page', 0) + 1
-                source_file = doc.metadata.get('source_file', '')
-                
-                st.markdown(f"**[{original_idx}] {source}** (Pág. {page})")
-                
-                if st.button(f"🔍 Ver PDF [{original_idx}]", key=f"btn_pdf_{i}_{id(doc)}"):
-                     if source_file:
+                with tab1:
+                    if source_file:
                         full_path = os.path.join(settings.TEMP_DOCS_DIR, source_file)
                         if os.path.exists(full_path):
                             pdf_viewer(
                                 full_path, 
                                 width=700, 
                                 height=600, 
-                                pages_to_render=[page],
-                                key=f"pdf_viewer_expander_{original_idx}_{i}_{page}_{id(doc)}"
+                                pages_to_render=[page], 
+                                render_text=True,
+                                key=f"pdf_viewer_{original_idx}_{i}_{page}_{id(doc)}"
                             )
+                        else:
+                            st.error(f"Archivo no encontrado: {source_file}")
+                    else:
+                        st.warning("Ruta de archivo no disponible.")
                 
-                st.caption(f"_{doc.page_content[:200]}..._")
-                st.divider()
+                with tab2:
+                    st.markdown(f"_{page_content}_")
+
+    # Expander for all other details or if user wants to see more
+    with st.expander(f"Ver todos los {len(sources)} documentos recuperados"):
+        for i, doc in enumerate(sources):
+            # Handle both dict and object access for metadata
+            metadata = doc.metadata if hasattr(doc, 'metadata') else doc.get('metadata', {})
+            source = os.path.basename(metadata.get('source', 'Desconocido'))
+            page = metadata.get('page', 0) + 1
+            
+            st.markdown(f"**[{i+1}] {source}** (Pág. {page})")
+            st.caption(f"_{doc.page_content[:150] if hasattr(doc, 'page_content') else doc.get('page_content', '')[:150]}..._")
+            st.divider()

@@ -1,6 +1,5 @@
 import streamlit as st
 import os
-import shutil
 from langchain_core.messages import messages_to_dict, messages_from_dict
 
 # Fix Tokenizers Parallelism Warning
@@ -12,27 +11,24 @@ from infrastructure.vector_store.faiss_repository import FAISSRepository
 from infrastructure.files.loader import DocumentLoader
 from infrastructure.ai.semantic_router import SemanticRouter
 from core.services.chat_service import ChatService
+from core.services.document_service import DocumentService
 from app.ui.views.chat_view import render_chat_view
+from app.services_factory import ServicesFactory
 
 # Configuración de la página
 st.set_page_config(page_title="Gestor de Conocimiento ISO 9001", layout="wide", page_icon="🍳")
 
 # Inicialización de componentes (Singleton pattern in session state)
 if "components" not in st.session_state:
-    st.session_state.components = {
-        "session_manager": SessionManager(),
-        "llm_provider": GroqProvider(),
-        "vector_repo": FAISSRepository(),
-        "doc_loader": DocumentLoader(),
-        "router": SemanticRouter()
-    }
+    st.session_state.components = ServicesFactory.create_services()
 
 # Referencias rápidas
 session_manager = st.session_state.components["session_manager"]
 llm_provider = st.session_state.components["llm_provider"]
 vector_repo = st.session_state.components["vector_repo"]
 doc_loader = st.session_state.components["doc_loader"]
-router = st.session_state.components["router"]
+router = st.session_state.components["router_repo"]
+doc_service = st.session_state.components["doc_service"]
 
 # Estado de la sesión
 if "session_id" not in st.session_state:
@@ -112,32 +108,17 @@ else:
         
         if uploaded_files and st.button("Procesar e Integrar"):
             with st.spinner("Procesando ingredientes..."):
-                # 1. Guardar temporalmente
-                temp_dir = os.path.join(session_path, "temp_uploads")
-                os.makedirs(temp_dir, exist_ok=True)
+                new_retriever, new_bm25, num_chunks = doc_service.process_and_ingest_files(
+                    uploaded_files, session_path, vector_repo
+                )
                 
-                file_paths = []
-                for uploaded_file in uploaded_files:
-                    file_path = os.path.join(temp_dir, uploaded_file.name)
-                    with open(file_path, "wb") as f:
-                        f.write(uploaded_file.getbuffer())
-                    file_paths.append(file_path)
-                
-                # 2. Cargar Documentos
-                chunks = doc_loader.load_documents(file_paths)
-                
-                # 3. Agregar a la DB
-                if chunks:
+                if num_chunks > 0:
                     # Actualizamos los retrievers del servicio actual
-                    new_retriever, new_bm25 = vector_repo.add_documents(session_path, chunks)
                     chat_service.vector_store = new_retriever
                     chat_service.bm25_retriever = new_bm25
-                    st.success(f"✅ {len(chunks)} fragmentos agregados al conocimiento.")
+                    st.success(f"✅ {num_chunks} fragmentos agregados al conocimiento.")
                 else:
                     st.warning("No se pudo extraer texto de los archivos.")
-                
-                # 4. Limpieza
-                shutil.rmtree(temp_dir)
 
     # Persistencia del historial (Guardar estado actual)
     if st.session_state.chat_history:

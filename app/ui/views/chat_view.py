@@ -45,14 +45,25 @@ def render_chat_view(chat_service: ChatService):
             st.markdown(prompt)
 
         with st.chat_message("assistant"):
-            with st.spinner("Analizando documentos..."):
+            # Placeholder for status
+            status_placeholder = st.empty()
+            with status_placeholder.status("Analizando documentos...", expanded=True) as status:
                 history_for_chain = st.session_state.chat_history[:-1]
-                response = chat_service.get_response(prompt, history_for_chain)
+                # Use streaming response
+                response_generator, source_docs, route = chat_service.get_streaming_response(prompt, history_for_chain)
+                status.update(label="Generando respuesta...", state="running")
                 
-                st.markdown(response.answer)
-                display_sources(response.source_documents, response.answer)
-                
-                ai_msg = AIMessage(content=response.answer)
-                ai_msg.additional_kwargs["sources"] = response.source_documents
-                st.session_state.chat_history.append(ai_msg)
-                st.rerun()
+                # Stream the response
+                full_response = st.write_stream(response_generator)
+                status.update(label="¡Respuesta completada!", state="complete", expanded=False)
+            
+            # Display sources after generation
+            display_sources(source_docs, full_response)
+            
+            # Save to history
+            ai_msg = AIMessage(content=full_response)
+            ai_msg.additional_kwargs["sources"] = source_docs
+            st.session_state.chat_history.append(ai_msg)
+            
+            # Force rerun to show feedback buttons and update history view
+            st.rerun()
