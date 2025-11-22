@@ -3,9 +3,9 @@ from typing import List, Any, Tuple
 
 class VectorStoreRepository(ABC):
     @abstractmethod
-    def create_vector_db(self, chunks: List[Any]) -> Tuple[Any, Any]:
+    def get_vector_db(self, session_path: str) -> Tuple[Any, Any]:
         pass
 
     @abstractmethod
-    def get_retriever(self, vectorstore: Any, bm25_retriever: Any):
+    def add_documents(self, session_path: str, new_documents: List[Any]) -> Tuple[Any, Any]:
         pass

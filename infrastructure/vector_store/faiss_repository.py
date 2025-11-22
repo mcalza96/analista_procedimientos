@@ -1,6 +1,8 @@
 import logging
 import os
-from typing import List, Tuple, Any
+from typing import List, Tuple, Any, Optional
+from pathlib import Path
+
 from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -30,28 +32,34 @@ class FAISSRepository(VectorStoreRepository):
             encode_kwargs={'normalize_embeddings': False}
         )
 
-    def create_vector_db(self, documents: List[Document]) -> Tuple[Any, Any]:
+    def get_vector_db(self, session_path: str) -> Tuple[Any, Any]:
+        """
+        Obtiene (carga o crea) la base de datos vectorial para una sesión.
+        
+        Args:
+            session_path: Ruta al directorio de la sesión.
+            
+        Returns:
+            Tuple[ParentDocumentRetriever, BM25Retriever]: Los retrievers configurados.
+        """
         try:
-            vector_store = None
-            bm25_retriever = None
-            
-            # 1. Configurar Almacenamiento de Documentos (Padres)
-            # Usamos una carpeta específica para el índice de documentos
-            docstore_path = "./docstore_index"
-            fs = LocalFileStore(docstore_path)
-            store = create_kv_docstore(fs)
-            
-            # 2. Configurar Splitters Duales
-            # child_splitter: Chunks pequeños para búsqueda vectorial precisa
-            child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
-            # parent_splitter: Chunks grandes para contexto completo al LLM
-            parent_splitter = RecursiveCharacterTextSplitter(chunk_size=4000, chunk_overlap=500)
+            session_dir = Path(session_path)
+            docstore_path = session_dir / "doc_store"
+            vectorstore_path = session_dir / "vector_store"
 
-            # 3. Inicializar o Cargar Vector Store (Hijos)
-            if os.path.exists(settings.PERSIST_DIRECTORY):
-                logger.info(f"Cargando índice existente desde {settings.PERSIST_DIRECTORY}...")
+            # 1. Configurar Almacenamiento de Documentos (Padres)
+            fs = LocalFileStore(str(docstore_path))
+            store = create_kv_docstore(fs)
+
+            # 2. Configurar Splitters
+            child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
+            parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+
+            # 3. Cargar o Inicializar Vector Store (FAISS)
+            if vectorstore_path.exists() and (vectorstore_path / "index.faiss").exists():
+                logger.info(f"Cargando índice FAISS existente desde {vectorstore_path}...")
                 vector_store = FAISS.load_local(
-                    settings.PERSIST_DIRECTORY, 
+                    str(vectorstore_path), 
                     self.embeddings, 
                     allow_dangerous_deserialization=True
                 )
@@ -74,53 +82,67 @@ class FAISSRepository(VectorStoreRepository):
                 parent_splitter=parent_splitter,
             )
 
-            # 5. Agregar documentos si se proporcionan
-            if documents:
-                logger.info(f"Agregando {len(documents)} documentos al ParentDocumentRetriever...")
-                # Esto automáticamente:
-                # 1. Divide docs en padres (2000 chars)
-                # 2. Guarda padres en docstore
-                # 3. Divide padres en hijos (400 chars)
-                # 4. Indexa hijos en vectorstore
-                retriever.add_documents(documents, ids=None)
-                
-                logger.info(f"Guardando índice vectorial en {settings.PERSIST_DIRECTORY}...")
-                vector_store.save_local(settings.PERSIST_DIRECTORY)
-                
-                # Crear BM25 con los documentos padres
-                # Necesitamos generar los mismos chunks padres que generó el retriever
-                logger.info("Generando chunks padres para BM25...")
-                parent_docs_for_bm25 = parent_splitter.split_documents(documents)
-                bm25_retriever = BM25Retriever.from_documents(parent_docs_for_bm25)
-            else:
-                # Reconstruir BM25 desde el DocStore
-                logger.info("Reconstruyendo BM25 desde DocStore...")
-                stored_docs = []
-                # Iterar sobre todos los documentos en el store
-                # yield_keys devuelve las claves de los documentos almacenados
-                for key in store.yield_keys():
-                    doc = store.mget([key])[0]
-                    if doc:
-                        stored_docs.append(doc)
-                
-                if stored_docs:
-                    bm25_retriever = BM25Retriever.from_documents(stored_docs)
-                else:
-                    logger.warning("No se encontraron documentos en el DocStore para BM25.")
-                    # Aún devolvemos el retriever aunque BM25 falle, para no romper todo
-            
-            if bm25_retriever:
-                bm25_retriever.k = 5
-            
-            # Devolvemos el retriever (ParentDocumentRetriever) y el bm25
+            # 5. Configurar BM25 Retriever
+            bm25_retriever = self._create_bm25_retriever(store)
+
             return retriever, bm25_retriever
 
         except Exception as e:
-            logger.error(f"Error crítico creando/cargando el Vector Store: {e}")
+            logger.error(f"Error obteniendo Vector DB para sesión {session_path}: {e}")
             raise e
 
-    def get_retriever(self, vectorstore: Any, bm25_retriever: BM25Retriever):
-        # This method might be redundant if we return the retrievers directly, 
-        # but useful if we want to encapsulate the Ensemble creation here.
-        # For now, we'll keep it simple and let the service handle Ensemble or move it here.
-        pass
+    def add_documents(self, session_path: str, new_documents: List[Document]) -> Tuple[Any, Any]:
+        """
+        Agrega nuevos documentos a la sesión existente.
+        
+        Args:
+            session_path: Ruta de la sesión.
+            new_documents: Lista de documentos a agregar.
+            
+        Returns:
+            Tuple[ParentDocumentRetriever, BM25Retriever]: Retrievers actualizados.
+        """
+        try:
+            # Obtener componentes actuales
+            retriever, _ = self.get_vector_db(session_path)
+            
+            if new_documents:
+                logger.info(f"Agregando {len(new_documents)} documentos a sesión {session_path}...")
+                retriever.add_documents(new_documents, ids=None)
+                
+                # Persistir Vector Store
+                vectorstore_path = Path(session_path) / "vector_store"
+                logger.info(f"Guardando índice vectorial actualizado en {vectorstore_path}...")
+                retriever.vectorstore.save_local(str(vectorstore_path))
+                
+                # Reconstruir BM25 con los nuevos datos
+                docstore_path = Path(session_path) / "doc_store"
+                fs = LocalFileStore(str(docstore_path))
+                store = create_kv_docstore(fs)
+                bm25_retriever = self._create_bm25_retriever(store)
+            else:
+                bm25_retriever = self._create_bm25_retriever(retriever.docstore)
+
+            return retriever, bm25_retriever
+
+        except Exception as e:
+            logger.error(f"Error agregando documentos a sesión {session_path}: {e}")
+            raise e
+
+    def _create_bm25_retriever(self, store: Any) -> Optional[BM25Retriever]:
+        """Helper para crear BM25 desde el docstore."""
+        try:
+            stored_docs = []
+            for key in store.yield_keys():
+                doc = store.mget([key])[0]
+                if doc:
+                    stored_docs.append(doc)
+            
+            if stored_docs:
+                bm25 = BM25Retriever.from_documents(stored_docs)
+                bm25.k = 5
+                return bm25
+            return None
+        except Exception as e:
+            logger.warning(f"No se pudo crear BM25Retriever: {e}")
+            return None

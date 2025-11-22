@@ -19,3 +19,8 @@ Thumbs.db
 # IDEs
 .vscode/
 .idea/
+
+# Runtime data
+data/
+docstore_index/
+faiss_index/
