@@ -2,7 +2,6 @@ import logging
 import os
 from typing import List, Any
 from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from llama_parse import LlamaParse
 from config.settings import settings
@@ -14,13 +13,6 @@ class DocumentLoader(DocumentLoaderRepository):
     def load_documents(self, pdf_paths: List[str]) -> List[Document]:
         all_chunks: List[Document] = []
         
-        # Configurar splitter
-        text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", " ", ""]
-        )
-
         # Inicializar LlamaParse si hay API Key
         parser = None
         if settings.LLAMA_CLOUD_API_KEY:
@@ -53,6 +45,7 @@ class DocumentLoader(DocumentLoaderRepository):
                                 page_content=doc.text,
                                 metadata={
                                     "source_file": filename,
+                                    "source": filename,
                                     "parser": "LlamaParse"
                                 }
                             )
@@ -74,14 +67,14 @@ class DocumentLoader(DocumentLoaderRepository):
                     # Asegurar metadatos
                     for doc in raw_documents:
                         doc.metadata['source_file'] = filename
+                        doc.metadata['source'] = filename
                         doc.metadata['parser'] = "PyPDFLoader"
                     used_parser = "PyPDFLoader"
 
-                # Dividir documentos
+                # Agregar documentos sin dividir (serán los padres)
                 if raw_documents:
-                    file_chunks = text_splitter.split_documents(raw_documents)
-                    all_chunks.extend(file_chunks)
-                    logger.info(f"Procesado exitosamente: {pdf_path} ({used_parser}) - {len(file_chunks)} chunks generados.")
+                    all_chunks.extend(raw_documents)
+                    logger.info(f"Procesado exitosamente: {pdf_path} ({used_parser}) - {len(raw_documents)} documentos padres generados.")
                 else:
                     logger.warning(f"No se pudo extraer contenido de {pdf_path}")
 

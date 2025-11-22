@@ -76,16 +76,6 @@ def display_sources(sources, text_content=""):
                     st.markdown(f"**[{original_idx}] 📄 {source}**")
                     st.caption(f"Página {page}")
                     
-                    if source_file:
-                        img = render_page_image(source_file, page - 1) # page is 1-indexed in metadata usually? No, usually 0-indexed in loader but displayed as +1. Let's check loader.
-                        # Loader uses PyPDFLoader. metadata['page'] is 0-indexed.
-                        # In display_sources original code: page = doc.metadata.get('page', 0) + 1
-                        # render_page_image expects 0-indexed.
-                        if img:
-                            st.image(img)
-                        else:
-                            st.caption("_Sin vista previa_")
-                    
                     popover_key = f"popover_{original_idx}_{i}"
                     with st.popover("🔍 Ver PDF Completo", use_container_width=True):
                         st.markdown(f"**Visualizando: {source} (Pág. {page})**")
@@ -97,7 +87,8 @@ def display_sources(sources, text_content=""):
                                     width=700, 
                                     height=800, 
                                     pages_to_render=[page], 
-                                    render_text=True
+                                    render_text=True,
+                                    key=f"pdf_viewer_{original_idx}_{i}_{page}_{id(doc)}"
                                 )
                             else:
                                 st.error("Archivo no encontrado.")
@@ -118,11 +109,17 @@ def display_sources(sources, text_content=""):
                 
                 st.markdown(f"**[{original_idx}] {source}** (Pág. {page})")
                 
-                if st.button(f"🔍 Ver PDF [{original_idx}]", key=f"btn_pdf_{i}"):
+                if st.button(f"🔍 Ver PDF [{original_idx}]", key=f"btn_pdf_{i}_{id(doc)}"):
                      if source_file:
                         full_path = os.path.join(settings.TEMP_DOCS_DIR, source_file)
                         if os.path.exists(full_path):
-                            pdf_viewer(full_path, width=700, height=600, pages_to_render=[page])
+                            pdf_viewer(
+                                full_path, 
+                                width=700, 
+                                height=600, 
+                                pages_to_render=[page],
+                                key=f"pdf_viewer_expander_{original_idx}_{i}_{page}_{id(doc)}"
+                            )
                 
                 st.caption(f"_{doc.page_content[:200]}..._")
                 st.divider()

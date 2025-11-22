@@ -9,6 +9,7 @@ class Settings:
     MODEL_NAME = "llama-3.3-70b-versatile"
     EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     PERSIST_DIRECTORY = "./faiss_index"
+    DOCSTORE_DIRECTORY = "./docstore"
     TEMP_DOCS_DIR = "docs_temp"
     FEEDBACK_FILE = "feedback_log.csv"
 

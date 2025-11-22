@@ -48,16 +48,18 @@ Pregunta: {query}""")
                 return ChatResponse(answer=res.content, route=route)
 
             # 3. RAG Mode
-            # Context here is expected to be (vectorstore, bm25_retriever)
-            vectorstore, bm25_retriever = context
+            # Context here is expected to be (parent_retriever, bm25_retriever)
+            parent_retriever, bm25_retriever = context
             
-            if not vectorstore or not bm25_retriever:
+            if not parent_retriever or not bm25_retriever:
                  return ChatResponse(answer="Por favor, carga documentos primero.", route="ERROR")
 
-            faiss_retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 10})
+            # Ensemble Retriever
+            # Combinamos el ParentDocumentRetriever (semántico + jerarquía) con BM25 (keywords)
+            # Damos más peso al Parent Retriever porque es más robusto semánticamente
             ensemble_retriever = EnsembleRetriever(
-                retrievers=[bm25_retriever, faiss_retriever],
-                weights=[0.5, 0.5]
+                retrievers=[bm25_retriever, parent_retriever],
+                weights=[0.4, 0.6]
             )
 
             # Obtén los documentos iniciales
@@ -111,8 +113,8 @@ Contexto: {context}"""
             ])
             
             document_prompt = PromptTemplate(
-                input_variables=["page_content", "source"],
-                template="Content: {page_content}\nSource: {source}"
+                input_variables=["page_content", "source_file"],
+                template="Content: {page_content}\nSource: {source_file}"
             )
             
             question_answer_chain = create_stuff_documents_chain(
@@ -146,14 +148,22 @@ Contexto: {context}"""
             return ChatResponse(answer="Error procesando la solicitud.", route="ERROR")
 
     def generate_quiz(self, topic: str, difficulty: str, num_questions: int, context: List[Any]) -> Quiz:
-        # Context is (vectorstore, bm25_retriever)
-        vectorstore, bm25_retriever = context
+        # Context is (retriever_or_vectorstore, bm25_retriever)
+        retriever_component, bm25_retriever = context
         
         # Retrieve relevant content for the topic
         docs = []
-        if vectorstore:
+        if retriever_component:
             # 1. Retrieve a larger pool of documents to ensure variety
-            docs = vectorstore.similarity_search(topic, k=20)
+            if hasattr(retriever_component, 'similarity_search'):
+                docs = retriever_component.similarity_search(topic, k=20)
+            else:
+                # It's a retriever (ParentDocumentRetriever)
+                # invoke returns relevant documents (parents)
+                docs = retriever_component.invoke(topic)
+                # If we want more, we might need to adjust search_kwargs of the underlying vectorstore?
+                # ParentDocumentRetriever uses search_kwargs of its vectorstore retriever if configured.
+                # But invoke is standard.
         
         # 2. Randomly select a subset (e.g., 5) to force different questions each time
         if len(docs) > 5:
