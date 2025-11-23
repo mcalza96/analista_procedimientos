@@ -54,11 +54,32 @@ def render_chat_view(
     if "chat_history" not in st.session_state:
         st.session_state.chat_history = []
 
+    # --- CONTEXTO INICIAL (Si no hay historial) ---
+    if not st.session_state.chat_history:
+        # Recuperar info de sesión
+        if "components" in st.session_state and st.session_state.session_id:
+            sm = st.session_state.components["session_manager"]
+            session_name = sm.get_session_name(st.session_state.session_id)
+            summary = sm.get_session_summary(st.session_state.session_id)
+            
+            st.markdown(f"## 📂 {session_name}")
+            if summary:
+                st.info(f"**Resumen del Proyecto:**\n\n{summary}")
+            else:
+                st.markdown("Bienvenido. Sube documentos para generar un resumen automático.")
+            st.divider()
+
     # --- HEADER DE ACCIONES DEL CHAT ---
     if st.session_state.chat_history:
-        col_h1, col_h2 = st.columns([4, 1])
+        col_h1, col_h2, col_h3 = st.columns([6, 2, 2])
+        
         with col_h2:
-            if st.button("🧠 Guardar Conversación", help="Guardar todo el chat actual como un documento de conocimiento"):
+            if st.button("🗑️ Limpiar", help="Borrar historial actual", use_container_width=True):
+                st.session_state.chat_history = []
+                st.rerun()
+
+        with col_h3:
+            if st.button("💾 Guardar", help="Guardar chat como documento", use_container_width=True):
                 # Formatear conversación completa
                 full_text = "REGISTRO DE CONVERSACIÓN\n========================\n\n"
                 for msg in st.session_state.chat_history:
@@ -77,11 +98,11 @@ def render_chat_view(
                     )
                     
                     if success:
-                        st.toast("✅ Conversación guardada en memoria", icon="🧠")
+                        st.toast("✅ Conversación guardada", icon="🧠")
                         # Opcional: Trigger update summary
                         st.session_state.needs_summary_update = True
                     else:
-                        st.error("Error al guardar conversación.")
+                        st.error("Error al guardar.")
 
     for i, message in enumerate(st.session_state.chat_history):
         if isinstance(message, HumanMessage):
@@ -166,5 +187,14 @@ def render_chat_view(
             ai_msg.additional_kwargs["sources"] = source_docs
             st.session_state.chat_history.append(ai_msg)
             
+            # --- RENOMBRADO AUTOMÁTICO (Si es el primer mensaje) ---
+            if len(st.session_state.chat_history) == 2: # 1 User + 1 AI
+                # Usar el prompt del usuario como título (truncado)
+                new_title = (prompt[:30] + '..') if len(prompt) > 30 else prompt
+                # Necesitamos session_manager aquí. Lo pasaremos como argumento o lo recuperamos de session_state
+                if "components" in st.session_state:
+                    sm = st.session_state.components["session_manager"]
+                    sm.rename_chat(st.session_state.session_id, st.session_state.active_chat_id, new_title)
+
             # Force rerun to show feedback buttons and update history view
             st.rerun()

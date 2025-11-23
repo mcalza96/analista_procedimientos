@@ -1,0 +1,35 @@
+/* Ocultar decoración de 'Running' y menú hamburguesa por defecto para limpieza */
+.stDeployButton {
+    display: none;
+}
+
+/* Reducir el efecto de fade-in/out de Streamlit */
+.stAppViewBlockContainer {
+    transition: opacity 0.05s ease-in-out !important;
+}
+
+/* Estabilizar el contenedor principal */
+.main .block-container {
+    padding-top: 2rem !important;
+    padding-bottom: 2rem !important;
+}
+
+/* Estilo profesional para tarjetas y contenedores */
+div[data-testid="stContainer"] {
+    border-radius: 8px;
+}
+
+/* Eliminar padding excesivo en sidebar */
+section[data-testid="stSidebar"] .block-container {
+    padding-top: 2rem;
+}
+
+/* Transiciones suaves para botones */
+button {
+    transition: all 0.2s ease !important;
+}
+
+/* Evitar parpadeo en iframes o componentes HTML */
+iframe {
+    transition: none !important;
+}

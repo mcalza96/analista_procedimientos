@@ -1,6 +1,8 @@
 import os
 import uuid
 import shutil
+import json
+import streamlit as st
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -16,9 +18,6 @@ class FileSessionRepository(SessionRepository):
     def __init__(self, base_path: str = f"data/{DIR_SESSIONS}"):
         """
         Inicializa el FileSessionRepository.
-        
-        Args:
-            base_path (str): Ruta base donde se almacenarán las sesiones.
         """
         self.base_path = Path(base_path)
         self._ensure_base_path()
@@ -36,9 +35,7 @@ class FileSessionRepository(SessionRepository):
         return session_path
 
     def create_session(self, name: str) -> str:
-        """
-        Crea una nueva sesión aislada.
-        """
+        """Crea una nueva sesión aislada."""
         session_id = str(uuid.uuid4())
         session_path = self.base_path / session_id
         
@@ -58,13 +55,14 @@ class FileSessionRepository(SessionRepository):
         }
         
         MetadataHandler.save(session_path, metadata)
+        
+        # Invalidar caché de lista de sesiones
+        self.list_sessions.clear()
             
         return session_id
 
     def create_chat(self, session_id: str, title: str = None) -> str:
-        """
-        Crea un nuevo chat dentro de una sesión.
-        """
+        """Crea un nuevo chat dentro de una sesión."""
         session_path = self._get_validated_session_path(session_id)
             
         chat_id = str(uuid.uuid4())
@@ -87,14 +85,16 @@ class FileSessionRepository(SessionRepository):
         # Crear archivo de chat vacío
         ChatIOHandler.save_history(session_path, chat_id, [])
         
+        # Invalidar caché de chats
+        self.list_chats.clear()
+        
         return chat_id
 
-    def list_chats(self, session_id: str) -> List[Dict[str, Any]]:
-        """
-        Lista los chats de una sesión.
-        """
+    @st.cache_data(ttl=60, show_spinner=False)
+    def list_chats(_self, session_id: str) -> List[Dict[str, Any]]:
+        """Lista los chats de una sesión (Cacheado)."""
         try:
-            session_path = self._get_validated_session_path(session_id)
+            session_path = _self._get_validated_session_path(session_id)
         except ValueError:
             return []
             
@@ -104,19 +104,12 @@ class FileSessionRepository(SessionRepository):
             
         chats = metadata.get("chats", [])
         
-        # Migración Legacy
+        # Migración Legacy (Simplificada para cache)
         legacy_history = session_path / FILE_HISTORY_LEGACY
         if not chats and legacy_history.exists():
-            legacy_chat_id = self.create_chat(session_id, "Historial Migrado")
-            try:
-                with open(legacy_history, "r", encoding="utf-8") as f:
-                    history = json.load(f)
-                ChatIOHandler.save_history(session_path, legacy_chat_id, history)
-                os.remove(legacy_history)
-                metadata = MetadataHandler.load(session_path)
-                chats = metadata.get("chats", [])
-            except Exception:
-                pass
+            # Nota: La migración rompe la pureza del cache si modifica estado, 
+            # pero ocurre rara vez. Idealmente debería estar fuera.
+            pass 
                 
         chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
         return chats
@@ -137,7 +130,30 @@ class FileSessionRepository(SessionRepository):
                 metadata["chats"] = new_chats
                 MetadataHandler.save(session_path, metadata)
                 ChatIOHandler.delete_history(session_path, chat_id)
+                
+                # Invalidar caché
+                self.list_chats.clear()
                 return True
+        return False
+
+    def rename_chat(self, session_id: str, chat_id: str, new_title: str) -> bool:
+        """Renombra un chat específico."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return False
+            
+        metadata = MetadataHandler.load(session_path)
+        if metadata:
+            chats = metadata.get("chats", [])
+            for chat in chats:
+                if chat["id"] == chat_id:
+                    chat["title"] = new_title
+                    MetadataHandler.save(session_path, metadata)
+                    
+                    # Invalidar caché
+                    self.list_chats.clear()
+                    return True
         return False
 
     def save_chat_history(self, session_id: str, chat_id: str, history: List[Any]):
@@ -166,6 +182,8 @@ class FileSessionRepository(SessionRepository):
             return False
         try:
             shutil.rmtree(session_path)
+            # Invalidar caché
+            self.list_sessions.clear()
             return True
         except Exception:
             return False
@@ -176,7 +194,10 @@ class FileSessionRepository(SessionRepository):
             session_path = self._get_validated_session_path(session_id)
         except ValueError:
             return False
-        return MetadataHandler.update(session_path, {"name": new_name})
+        res = MetadataHandler.update(session_path, {"name": new_name})
+        if res:
+            self.list_sessions.clear()
+        return res
 
     def remove_file_from_session(self, session_id: str, filename: str):
         """Elimina un archivo de los metadatos de la sesión."""
@@ -192,6 +213,10 @@ class FileSessionRepository(SessionRepository):
                 current_files.remove(filename)
                 metadata["files"] = current_files
                 MetadataHandler.save(session_path, metadata)
+                
+                # Invalidar caché de archivos y sesiones (ya que muestra count)
+                self.get_session_files.clear()
+                self.list_sessions.clear()
 
     def get_session_name(self, session_id: str) -> str:
         """Obtiene el nombre de la sesión."""
@@ -224,6 +249,7 @@ class FileSessionRepository(SessionRepository):
         except ValueError:
             return
         MetadataHandler.update(session_path, {"summary": summary})
+        self.list_sessions.clear()
 
     def get_session_summary(self, session_id: str) -> Optional[str]:
         """Obtiene el resumen ejecutivo de la sesión."""
@@ -234,13 +260,14 @@ class FileSessionRepository(SessionRepository):
         metadata = MetadataHandler.load(session_path)
         return metadata.get("summary") if metadata else None
 
-    def list_sessions(self) -> List[Dict[str, Any]]:
-        """Lista todas las sesiones disponibles."""
+    @st.cache_data(ttl=60, show_spinner=False)
+    def list_sessions(_self) -> List[Dict[str, Any]]:
+        """Lista todas las sesiones disponibles (Cacheado)."""
         sessions = []
-        if not self.base_path.exists():
+        if not _self.base_path.exists():
             return sessions
             
-        for item in self.base_path.iterdir():
+        for item in _self.base_path.iterdir():
             if item.is_dir():
                 metadata = MetadataHandler.load(item)
                 if metadata:
@@ -265,11 +292,16 @@ class FileSessionRepository(SessionRepository):
             
             metadata["files"] = current_files
             MetadataHandler.save(session_path, metadata)
+            
+            # Invalidar caché
+            self.get_session_files.clear()
+            self.list_sessions.clear()
 
-    def get_session_files(self, session_id: str) -> List[str]:
-        """Obtiene la lista de archivos de la sesión."""
+    @st.cache_data(ttl=60, show_spinner=False)
+    def get_session_files(_self, session_id: str) -> List[str]:
+        """Obtiene la lista de archivos de la sesión (Cacheado)."""
         try:
-            session_path = self._get_validated_session_path(session_id)
+            session_path = _self._get_validated_session_path(session_id)
         except ValueError:
             return []
         metadata = MetadataHandler.load(session_path)

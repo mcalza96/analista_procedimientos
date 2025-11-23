@@ -13,7 +13,7 @@ class Settings:
     
     MODEL_NAME = "llama-3.3-70b-versatile"
     EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-    RERANKER_MODEL = "cross-encoder/mmarco-mMiniLM-v2-L12-H384-v1"
+    RERANKER_MODEL = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
     
     # RAG Configuration
     CHUNK_SIZE_CHILD = 400

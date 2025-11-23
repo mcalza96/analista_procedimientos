@@ -35,7 +35,7 @@ class ChatService:
         self.bm25_retriever = None
         # Inicializamos Reranker Multilingüe Ligero
         try:
-            self.reranker = CrossEncoder(settings.RERANKER_MODEL)
+            self.reranker = CrossEncoder(settings.RERANKER_MODEL, device='cpu')
         except Exception as e:
             logger.warning(f"Error cargando reranker: {e}")
             self.reranker = None
@@ -244,7 +244,8 @@ class ChatService:
             # 1. Recuperar una muestra amplia de documentos
             # Aumentamos k para tener más contexto y reducimos el riesgo de perder info clave
             # Usamos una query que busque estructura documental
-            docs = self.vector_store.similarity_search(
+            # Accedemos al vectorstore subyacente porque ParentDocumentRetriever no tiene similarity_search
+            docs = self.vector_store.vectorstore.similarity_search(
                 "objetivo alcance definiciones responsabilidades procedimiento", 
                 k=15
             )
@@ -267,4 +268,38 @@ class ChatService:
         except Exception as e:
             logger.error(f"Error generando resumen de contexto: {e}")
             return f"No se pudo generar el resumen del contexto debido a un error: {str(e)}"
+
+    def generate_quiz(self, topic: str, difficulty: str, num_questions: int) -> str:
+        """
+        Genera un cuestionario de opción múltiple basado en el contexto disponible.
+        Retorna un string JSON con las preguntas.
+        """
+        try:
+            # 1. Recuperar contexto relevante para el tema
+            context_str = ""
+            if self.vector_store:
+                # Accedemos al vectorstore subyacente porque ParentDocumentRetriever no tiene similarity_search
+                docs = self.vector_store.vectorstore.similarity_search(topic, k=8)
+                context_str = "\n\n".join([d.page_content for d in docs])
+            
+            if not context_str:
+                # Fallback si no hay contexto específico, intentar general o avisar
+                # Pero permitimos que el LLM intente con lo que sabe si es un tema general,
+                # aunque el prompt pide contexto. Le pasamos un aviso.
+                context_str = "No se encontró contexto específico en la base de datos. Usa tu conocimiento general de ISO 9001."
+
+            # 2. Obtener prompt
+            prompt = self.prompt_manager.get_quiz_prompt(topic, difficulty, num_questions, context_str)
+            
+            # 3. Generar respuesta (esperamos JSON)
+            response = self.llm_provider.generate_response(prompt)
+            
+            # Limpieza básica de markdown si el modelo devuelve ```json ... ```
+            clean_response = response.replace("```json", "").replace("```", "").strip()
+            
+            return clean_response
+
+        except Exception as e:
+            logger.error(f"Error generando cuestionario: {e}")
+            return f'{{"error": "{str(e)}"}}'
 

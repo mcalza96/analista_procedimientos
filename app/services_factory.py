@@ -1,3 +1,6 @@
+import streamlit as st
+from langchain_huggingface import HuggingFaceEmbeddings
+from config.settings import settings
 from infrastructure.llm.groq_provider import GroqProvider
 from infrastructure.vector_store.faiss_repository import FAISSRepository
 from infrastructure.files.loader import DocumentLoader
@@ -11,10 +14,28 @@ from core.services.prompt_manager import PromptManager
 
 class ServicesFactory:
     @staticmethod
+    @st.cache_resource(show_spinner="Cargando modelos de IA...")
+    def get_embedding_model():
+        """
+        Carga y cachea el modelo de embeddings.
+        Esto evita recargar el modelo pesado en cada recarga de página.
+        """
+        return HuggingFaceEmbeddings(
+            model_name=settings.EMBEDDING_MODEL,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': False}
+        )
+
+    @staticmethod
+    @st.cache_resource(show_spinner="Iniciando servicios del sistema...")
     def create_services():
         """Creates and returns a dictionary of initialized services."""
         llm_provider = GroqProvider()
-        vector_repo = FAISSRepository()
+        
+        # Inyectar modelo cacheado
+        embeddings = ServicesFactory.get_embedding_model()
+        vector_repo = FAISSRepository(embeddings)
+        
         doc_loader = DocumentLoader()
         router_repo = SemanticRouter()
         session_repo = FileSessionRepository()

@@ -22,12 +22,8 @@ from langchain_community.docstore.in_memory import InMemoryDocstore
 logger = logging.getLogger(__name__)
 
 class FAISSRepository(VectorStoreRepository):
-    def __init__(self):
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=settings.EMBEDDING_MODEL,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': False}
-        )
+    def __init__(self, embeddings: Any):
+        self.embeddings = embeddings
 
     def _get_splitters(self) -> Tuple[RecursiveCharacterTextSplitter, RecursiveCharacterTextSplitter]:
         """Configura y retorna los splitters para documentos hijos y padres."""
