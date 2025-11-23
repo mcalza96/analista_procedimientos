@@ -1,15 +1,21 @@
 import os
-import json
 import uuid
 import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+from core.interfaces.session_repository import SessionRepository
+from infrastructure.storage.handlers.metadata_handler import MetadataHandler
+from infrastructure.storage.handlers.chat_io_handler import ChatIOHandler
+from infrastructure.constants import (
+    DIR_SESSIONS, DIR_VECTOR_STORE, DIR_DOC_STORE, DIR_CHATS,
+    FILE_METADATA, FILE_HISTORY_LEGACY, DEFAULT_SESSION_NAME, DEFAULT_CHAT_TITLE_PREFIX
+)
 
-class SessionManager:
-    def __init__(self, base_path: str = "data/sessions"):
+class FileSessionRepository(SessionRepository):
+    def __init__(self, base_path: str = f"data/{DIR_SESSIONS}"):
         """
-        Inicializa el SessionManager.
+        Inicializa el FileSessionRepository.
         
         Args:
             base_path (str): Ruta base donde se almacenarán las sesiones.
@@ -22,213 +28,187 @@ class SessionManager:
         if not self.base_path.exists():
             self.base_path.mkdir(parents=True, exist_ok=True)
 
+    def _get_validated_session_path(self, session_id: str) -> Path:
+        """Obtiene y valida la ruta de la sesión."""
+        session_path = self.base_path / session_id
+        if not session_path.exists():
+            raise ValueError(f"Session {session_id} does not exist")
+        return session_path
+
     def create_session(self, name: str) -> str:
         """
         Crea una nueva sesión aislada.
-        
-        Args:
-            name (str): Nombre legible para la sesión.
-            
-        Returns:
-            str: El ID único de la sesión creada.
         """
         session_id = str(uuid.uuid4())
         session_path = self.base_path / session_id
         
         # Crear estructura de directorios
         session_path.mkdir(parents=True, exist_ok=True)
-        (session_path / "vector_store").mkdir(exist_ok=True)
-        (session_path / "doc_store").mkdir(exist_ok=True)
+        (session_path / DIR_VECTOR_STORE).mkdir(exist_ok=True)
+        (session_path / DIR_DOC_STORE).mkdir(exist_ok=True)
+        (session_path / DIR_CHATS).mkdir(exist_ok=True)
         
         # Crear metadatos
         metadata = {
             "id": session_id,
             "name": name,
             "created_at": datetime.now().isoformat(),
-            "files": []
+            "files": [],
+            "chats": []
         }
         
-        self._save_metadata(session_path, metadata)
+        MetadataHandler.save(session_path, metadata)
             
         return session_id
 
-    def add_files_to_session(self, session_id: str, filenames: List[str]):
+    def create_chat(self, session_id: str, title: str = None) -> str:
         """
-        Registra archivos agregados a la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            filenames (List[str]): Lista de nombres de archivos.
+        Crea un nuevo chat dentro de una sesión.
         """
-        session_path = self.base_path / session_id
-        if not session_path.exists():
-            raise ValueError(f"Session {session_id} does not exist")
+        session_path = self._get_validated_session_path(session_id)
             
-        metadata = self._load_metadata(session_path)
+        chat_id = str(uuid.uuid4())
+        created_at = datetime.now().isoformat()
+        
+        if not title:
+            title = f"{DEFAULT_CHAT_TITLE_PREFIX} {datetime.now().strftime('%d/%m %H:%M')}"
+            
+        metadata = MetadataHandler.load(session_path)
         if metadata:
-            current_files = metadata.get("files", [])
-            # Evitar duplicados
-            for f in filenames:
-                if f not in current_files:
-                    current_files.append(f)
-            metadata["files"] = current_files
-            self._save_metadata(session_path, metadata)
-
-    def get_session_files(self, session_id: str) -> List[str]:
-        """
-        Obtiene la lista de archivos registrados en la sesión.
+            chats = metadata.get("chats", [])
+            chats.append({
+                "id": chat_id,
+                "title": title,
+                "created_at": created_at
+            })
+            metadata["chats"] = chats
+            MetadataHandler.save(session_path, metadata)
+            
+        # Crear archivo de chat vacío
+        ChatIOHandler.save_history(session_path, chat_id, [])
         
-        Args:
-            session_id (str): ID de la sesión.
-            
-        Returns:
-            List[str]: Lista de nombres de archivos.
-        """
-        session_path = self.base_path / session_id
-        if not session_path.exists():
-            return []
-            
-        metadata = self._load_metadata(session_path)
-        return metadata.get("files", []) if metadata else []
+        return chat_id
 
-    def list_sessions(self) -> List[Dict[str, Any]]:
+    def list_chats(self, session_id: str) -> List[Dict[str, Any]]:
         """
-        Lista todas las sesiones existentes ordenadas por fecha (más reciente primero).
-        
-        Returns:
-            List[Dict[str, Any]]: Lista de metadatos de las sesiones.
+        Lista los chats de una sesión.
         """
-        sessions = []
-        if not self.base_path.exists():
-            return sessions
-            
-        for session_dir in self.base_path.iterdir():
-            if session_dir.is_dir():
-                metadata = self._load_metadata(session_dir)
-                if metadata:
-                    sessions.append(metadata)
-                        
-        # Ordenar por fecha de creación descendente
-        sessions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
-        return sessions
-
-    def save_history(self, session_id: str, history: List[Any]):
-        """
-        Guarda el historial del chat en la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            history (List[Any]): Lista de mensajes a guardar.
-        """
-        session_path = self.base_path / session_id
-        if not session_path.exists():
-            raise ValueError(f"Session {session_id} does not exist")
-            
-        history_path = session_path / "history.json"
-        with open(history_path, "w", encoding="utf-8") as f:
-            # Se asume que history es serializable a JSON (lista de dicts)
-            # Si son objetos complejos, el llamador debería convertirlos antes
-            json.dump(history, f, indent=4, ensure_ascii=False)
-
-    def load_history(self, session_id: str) -> List[Any]:
-        """
-        Carga el historial del chat de la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            
-        Returns:
-            List[Any]: Lista de mensajes recuperada.
-        """
-        session_path = self.base_path / session_id
-        if not session_path.exists():
-            raise ValueError(f"Session {session_id} does not exist")
-            
-        history_path = session_path / "history.json"
-        if not history_path.exists():
-            return []
-            
         try:
-            with open(history_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
             return []
+            
+        metadata = MetadataHandler.load(session_path)
+        if not metadata:
+            return []
+            
+        chats = metadata.get("chats", [])
+        
+        # Migración Legacy
+        legacy_history = session_path / FILE_HISTORY_LEGACY
+        if not chats and legacy_history.exists():
+            legacy_chat_id = self.create_chat(session_id, "Historial Migrado")
+            try:
+                with open(legacy_history, "r", encoding="utf-8") as f:
+                    history = json.load(f)
+                ChatIOHandler.save_history(session_path, legacy_chat_id, history)
+                os.remove(legacy_history)
+                metadata = MetadataHandler.load(session_path)
+                chats = metadata.get("chats", [])
+            except Exception:
+                pass
+                
+        chats.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return chats
+
+    def delete_chat(self, session_id: str, chat_id: str) -> bool:
+        """Elimina un chat específico."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return False
+            
+        metadata = MetadataHandler.load(session_path)
+        if metadata:
+            chats = metadata.get("chats", [])
+            new_chats = [c for c in chats if c["id"] != chat_id]
+            
+            if len(new_chats) < len(chats):
+                metadata["chats"] = new_chats
+                MetadataHandler.save(session_path, metadata)
+                ChatIOHandler.delete_history(session_path, chat_id)
+                return True
+        return False
+
+    def save_chat_history(self, session_id: str, chat_id: str, history: List[Any]):
+        """Guarda el historial de un chat específico."""
+        session_path = self._get_validated_session_path(session_id)
+        ChatIOHandler.save_history(session_path, chat_id, history)
+
+    def load_chat_history(self, session_id: str, chat_id: str) -> List[Any]:
+        """Carga el historial de un chat específico."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return []
+        return ChatIOHandler.load_history(session_path, chat_id)
 
     def get_session_path(self, session_id: str) -> str:
-        """
-        Obtiene la ruta absoluta del directorio de la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            
-        Returns:
-            str: Ruta absoluta.
-        """
+        """Obtiene la ruta absoluta del directorio de la sesión."""
         session_path = self.base_path / session_id
         return str(session_path.resolve())
 
     def delete_session(self, session_id: str) -> bool:
-        """
-        Elimina una sesión y todos sus datos asociados.
-        
-        Args:
-            session_id (str): ID de la sesión a eliminar.
-            
-        Returns:
-            bool: True si se eliminó correctamente, False si no existía o hubo error.
-        """
-        session_path = self.base_path / session_id
-        if not session_path.exists():
+        """Elimina una sesión y todos sus datos asociados."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
             return False
-            
         try:
             shutil.rmtree(session_path)
             return True
         except Exception:
             return False
 
-    def _save_metadata(self, session_path: Path, metadata: Dict[str, Any]):
-        """Helper para guardar metadatos."""
-        with open(session_path / "metadata.json", "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=4, ensure_ascii=False)
-
-    def _load_metadata(self, session_path: Path) -> Optional[Dict[str, Any]]:
-        """Helper para cargar metadatos."""
-        metadata_path = session_path / "metadata.json"
-        if not metadata_path.exists():
-            return None
+    def rename_session(self, session_id: str, new_name: str) -> bool:
+        """Renombra una sesión existente."""
         try:
-            with open(metadata_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return None
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return False
+        return MetadataHandler.update(session_path, {"name": new_name})
+
+    def remove_file_from_session(self, session_id: str, filename: str):
+        """Elimina un archivo de los metadatos de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return
+            
+        metadata = MetadataHandler.load(session_path)
+        if metadata:
+            current_files = metadata.get("files", [])
+            if filename in current_files:
+                current_files.remove(filename)
+                metadata["files"] = current_files
+                MetadataHandler.save(session_path, metadata)
 
     def get_session_name(self, session_id: str) -> str:
-        """
-        Obtiene el nombre de la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            
-        Returns:
-            str: Nombre de la sesión o "Sesión Desconocida".
-        """
-        session_path = self.base_path / session_id
-        metadata = self._load_metadata(session_path)
-        return metadata.get("name", "Sesión Desconocida") if metadata else "Sesión Desconocida"
+        """Obtiene el nombre de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return DEFAULT_SESSION_NAME
+        metadata = MetadataHandler.load(session_path)
+        return metadata.get("name", DEFAULT_SESSION_NAME) if metadata else DEFAULT_SESSION_NAME
 
     def get_session_date(self, session_id: str) -> str:
-        """
-        Obtiene la fecha de creación de la sesión.
-        
-        Args:
-            session_id (str): ID de la sesión.
-            
-        Returns:
-            str: Fecha formateada o "Desconocida".
-        """
-        session_path = self.base_path / session_id
-        metadata = self._load_metadata(session_path)
+        """Obtiene la fecha de creación de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return "Desconocida"
+        metadata = MetadataHandler.load(session_path)
         if metadata and "created_at" in metadata:
             try:
                 dt = datetime.fromisoformat(metadata["created_at"])
@@ -236,3 +216,61 @@ class SessionManager:
             except ValueError:
                 return metadata["created_at"]
         return "Desconocida"
+
+    def update_session_summary(self, session_id: str, summary: str):
+        """Actualiza el resumen ejecutivo de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return
+        MetadataHandler.update(session_path, {"summary": summary})
+
+    def get_session_summary(self, session_id: str) -> Optional[str]:
+        """Obtiene el resumen ejecutivo de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return None
+        metadata = MetadataHandler.load(session_path)
+        return metadata.get("summary") if metadata else None
+
+    def list_sessions(self) -> List[Dict[str, Any]]:
+        """Lista todas las sesiones disponibles."""
+        sessions = []
+        if not self.base_path.exists():
+            return sessions
+            
+        for item in self.base_path.iterdir():
+            if item.is_dir():
+                metadata = MetadataHandler.load(item)
+                if metadata:
+                    sessions.append(metadata)
+        
+        sessions.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return sessions
+
+    def add_files_to_session(self, session_id: str, filenames: List[str]):
+        """Añade archivos a los metadatos de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return
+            
+        metadata = MetadataHandler.load(session_path)
+        if metadata:
+            current_files = metadata.get("files", [])
+            for f in filenames:
+                if f not in current_files:
+                    current_files.append(f)
+            
+            metadata["files"] = current_files
+            MetadataHandler.save(session_path, metadata)
+
+    def get_session_files(self, session_id: str) -> List[str]:
+        """Obtiene la lista de archivos de la sesión."""
+        try:
+            session_path = self._get_validated_session_path(session_id)
+        except ValueError:
+            return []
+        metadata = MetadataHandler.load(session_path)
+        return metadata.get("files", []) if metadata else []

@@ -1,5 +1,13 @@
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Any
+from enum import Enum
+
+class RouteType(str, Enum):
+    PRECISION = "PRECISION"
+    ANALYSIS = "ANALYSIS"
+    CHAT = "CHAT"
+    WALKTHROUGH = "WALKTHROUGH"
+    ERROR = "ERROR"
 
 @dataclass
 class SourceDocument:
@@ -12,7 +20,7 @@ class SourceDocument:
 class ChatResponse:
     answer: str
     source_documents: List[SourceDocument] = field(default_factory=list)
-    route: str = "DEFAULT"
+    route: RouteType = RouteType.CHAT
 
 @dataclass
 class QuizQuestion:

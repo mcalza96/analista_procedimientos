@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 from typing import List, Tuple, Any, Optional
 from pathlib import Path
 
@@ -7,7 +8,6 @@ from langchain_core.documents import Document
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.retrievers import BM25Retriever
-# Updated imports for langchain compatibility
 from langchain_classic.retrievers import ParentDocumentRetriever
 from langchain_classic.storage import LocalFileStore
 from langchain_classic.storage._lc_store import create_kv_docstore
@@ -15,6 +15,7 @@ from langchain_classic.storage._lc_store import create_kv_docstore
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from core.interfaces.vector_store import VectorStoreRepository
 from config.settings import settings
+from infrastructure.constants import DIR_DOC_STORE, DIR_VECTOR_STORE, FILE_FAISS_INDEX
 import faiss
 from langchain_community.docstore.in_memory import InMemoryDocstore
 
@@ -28,26 +29,48 @@ class FAISSRepository(VectorStoreRepository):
             encode_kwargs={'normalize_embeddings': False}
         )
 
+    def _get_splitters(self) -> Tuple[RecursiveCharacterTextSplitter, RecursiveCharacterTextSplitter]:
+        """Configura y retorna los splitters para documentos hijos y padres."""
+        child_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.CHUNK_SIZE_CHILD, 
+            chunk_overlap=settings.CHUNK_OVERLAP_CHILD
+        )
+        parent_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=settings.CHUNK_SIZE_PARENT, 
+            chunk_overlap=settings.CHUNK_OVERLAP_PARENT
+        )
+        return child_splitter, parent_splitter
+
+    def _load_or_create_vector_store(self, vectorstore_path: Path) -> FAISS:
+        """Carga un índice FAISS existente o crea uno nuevo."""
+        if vectorstore_path.exists() and (vectorstore_path / FILE_FAISS_INDEX).exists():
+            logger.info(f"Cargando índice FAISS existente desde {vectorstore_path}...")
+            return FAISS.load_local(
+                str(vectorstore_path), 
+                self.embeddings, 
+                allow_dangerous_deserialization=True
+            )
+        
+        logger.info("Inicializando nuevo índice FAISS vacío...")
+        embedding_size = len(self.embeddings.embed_query("test"))
+        index = faiss.IndexFlatL2(embedding_size)
+        return FAISS(
+            embedding_function=self.embeddings,
+            index=index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={}
+        )
+
     def get_vector_db(self, session_path: str) -> Tuple[Any, Any]:
         """
         Obtiene (carga o crea) la base de datos vectorial para una sesión.
-        
-        Args:
-            session_path: Ruta al directorio de la sesión.
-            
-        Returns:
-            Tuple[ParentDocumentRetriever, BM25Retriever]: Los retrievers configurados.
-            
-        Raises:
-            ValueError: Si el directorio de sesión no existe.
-            RuntimeError: Si hay un error crítico cargando el índice.
         """
         session_dir = Path(session_path)
         if not session_dir.exists():
             raise ValueError(f"El directorio de sesión no existe: {session_path}")
 
-        docstore_path = session_dir / "doc_store"
-        vectorstore_path = session_dir / "vector_store"
+        docstore_path = session_dir / DIR_DOC_STORE
+        vectorstore_path = session_dir / DIR_VECTOR_STORE
 
         try:
             # 1. Configurar Almacenamiento de Documentos (Padres)
@@ -55,40 +78,18 @@ class FAISSRepository(VectorStoreRepository):
             store = create_kv_docstore(fs)
 
             # 2. Configurar Splitters
-            child_splitter = RecursiveCharacterTextSplitter(chunk_size=400, chunk_overlap=50)
-            parent_splitter = RecursiveCharacterTextSplitter(chunk_size=2000, chunk_overlap=200)
+            child_splitter, parent_splitter = self._get_splitters()
 
             # 3. Cargar o Inicializar Vector Store (FAISS)
-            if vectorstore_path.exists() and (vectorstore_path / "index.faiss").exists():
-                logger.info(f"Cargando índice FAISS existente desde {vectorstore_path}...")
-                # ADVERTENCIA DE SEGURIDAD: allow_dangerous_deserialization=True es necesario para cargar
-                # archivos pickle locales generados por FAISS. Solo debe usarse con índices confiables
-                # generados internamente por esta misma aplicación.
-                vector_store = FAISS.load_local(
-                    str(vectorstore_path), 
-                    self.embeddings, 
-                    allow_dangerous_deserialization=True
-                )
-            else:
-                logger.info("Inicializando nuevo índice FAISS vacío...")
-                embedding_size = len(self.embeddings.embed_query("test"))
-                index = faiss.IndexFlatL2(embedding_size)
-                vector_store = FAISS(
-                    embedding_function=self.embeddings,
-                    index=index,
-                    docstore=InMemoryDocstore(),
-                    index_to_docstore_id={}
-                )
+            vector_store = self._load_or_create_vector_store(vectorstore_path)
 
             # 4. Configurar ParentDocumentRetriever
-            # Aumentamos search_kwargs k=60 para traer más candidatos iniciales
-            # Esto es crucial para preguntas complejas que requieren datos de múltiples secciones
             retriever = ParentDocumentRetriever(
                 vectorstore=vector_store,
                 docstore=store,
                 child_splitter=child_splitter,
                 parent_splitter=parent_splitter,
-                search_kwargs={"k": 60}
+                search_kwargs={"k": settings.RETRIEVER_K_PARENT}
             )
 
             # 5. Configurar BM25 Retriever
@@ -103,13 +104,6 @@ class FAISSRepository(VectorStoreRepository):
     def add_documents(self, session_path: str, new_documents: List[Document]) -> Tuple[Any, Any]:
         """
         Agrega nuevos documentos a la sesión existente.
-        
-        Args:
-            session_path: Ruta de la sesión.
-            new_documents: Lista de documentos a agregar.
-            
-        Returns:
-            Tuple[ParentDocumentRetriever, BM25Retriever]: Retrievers actualizados.
         """
         try:
             # Obtener componentes actuales
@@ -120,12 +114,12 @@ class FAISSRepository(VectorStoreRepository):
                 retriever.add_documents(new_documents, ids=None)
                 
                 # Persistir Vector Store
-                vectorstore_path = Path(session_path) / "vector_store"
+                vectorstore_path = Path(session_path) / DIR_VECTOR_STORE
                 logger.info(f"Guardando índice vectorial actualizado en {vectorstore_path}...")
                 retriever.vectorstore.save_local(str(vectorstore_path))
                 
                 # Reconstruir BM25 con los nuevos datos
-                docstore_path = Path(session_path) / "doc_store"
+                docstore_path = Path(session_path) / DIR_DOC_STORE
                 fs = LocalFileStore(str(docstore_path))
                 store = create_kv_docstore(fs)
                 bm25_retriever = self._create_bm25_retriever(store)
@@ -149,9 +143,35 @@ class FAISSRepository(VectorStoreRepository):
             
             if stored_docs:
                 bm25 = BM25Retriever.from_documents(stored_docs)
-                bm25.k = 30  # Aumentamos de 10 a 30 para capturar más palabras clave
+                bm25.k = settings.RETRIEVER_K_BM25
                 return bm25
             return None
         except Exception as e:
             logger.warning(f"No se pudo crear BM25Retriever: {e}")
             return None
+
+    def clear_index(self, session_path: str) -> bool:
+        """
+        Elimina físicamente los directorios del índice vectorial y docstore.
+        """
+        try:
+            session_dir = Path(session_path)
+            vectorstore_path = session_dir / DIR_VECTOR_STORE
+            docstore_path = session_dir / DIR_DOC_STORE
+
+            if vectorstore_path.exists():
+                shutil.rmtree(vectorstore_path)
+                logger.info(f"Eliminado índice vectorial en {vectorstore_path}")
+            
+            if docstore_path.exists():
+                shutil.rmtree(docstore_path)
+                logger.info(f"Eliminado docstore en {docstore_path}")
+
+            # Recrear directorios vacíos
+            vectorstore_path.mkdir(parents=True, exist_ok=True)
+            docstore_path.mkdir(parents=True, exist_ok=True)
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error limpiando índice para sesión {session_path}: {e}")
+            return False

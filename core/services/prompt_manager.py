@@ -1,49 +1,45 @@
 from typing import List, Any
 
 class PromptManager:
-    @staticmethod
-    def get_chat_prompt(query: str) -> str:
+    
+    _COMMON_CITATION_RULES = """
+REGLAS DE CITA ESTRICTAS:
+1. CADA afirmación o dato extraído del texto DEBE llevar una cita numérica [X] INMEDIATAMENTE al final de la frase correspondiente.
+2. NO coloques las citas al final del párrafo, deben ser precisas por frase.
+3. Si una frase se basa en múltiples fuentes, usa el formato [1][2].
+4. NO generes una sección de 'Fuentes', 'Referencias' o 'Bibliografía' al final."""
+
+    def get_chat_prompt(self, query: str) -> str:
         return f"""Eres un asistente amable del laboratorio ISO 9001.
 Responde al saludo o pregunta general de forma cordial y profesional.
 Si te preguntan sobre procedimientos, sugiere subir manuales.
 Pregunta: {query}"""
 
-    @staticmethod
-    def get_audit_prompt(context: str) -> str:
+    def get_audit_prompt(self, context: str) -> str:
         return f"""Eres un Auditor de Calidad ISO 9001 estricto y profesional.
 Tu objetivo es analizar el contexto proporcionado y extraer evidencia concreta para responder a la consulta.
 
-REGLAS DE CITA ESTRICTAS:
-1. CADA afirmación o dato extraído del texto DEBE llevar una cita numérica [X] INMEDIATAMENTE al final de la frase correspondiente.
-2. NO coloques las citas al final del párrafo, deben ser precisas por frase.
-3. Si una frase se basa en múltiples fuentes, usa el formato [1][2].
-4. NO generes una sección de 'Fuentes', 'Referencias' o 'Bibliografía' al final.
+{self._COMMON_CITATION_RULES}
 5. Si la información no está explícita en el contexto, indica claramente 'No hay información suficiente en los documentos proporcionados'.
 
 Contexto: {context}"""
 
-    @staticmethod
-    def get_walkthrough_prompt(context: str) -> str:
+    def get_walkthrough_prompt(self, context: str) -> str:
         return f"""Eres un Instructor de Laboratorio.
 Guía paso a paso. Si dice 'Empezar', da el Paso 1.
 Contexto: {context}"""
 
-    @staticmethod
-    def get_precision_prompt(context: str) -> str:
+    def get_precision_prompt(self, context: str) -> str:
         return f"""Eres un Asistente Técnico estricto y directo.
 Responde basándote ÚNICAMENTE en el contexto proporcionado.
+Sé extremadamente breve y conciso.
 
-REGLAS DE CITA ESTRICTAS:
-1. Sé extremadamente breve y conciso.
-2. CADA afirmación DEBE llevar su cita numérica [X] INMEDIATAMENTE al final de la frase.
-3. Si hay múltiples fuentes, usa [1][2].
-4. NO generes listas de fuentes o bibliografía al final.
+{self._COMMON_CITATION_RULES}
 5. Si no encuentras la respuesta exacta, di 'No se encuentra en el contexto'.
 
 Contexto: {context}"""
 
-    @staticmethod
-    def get_quiz_prompt(topic: str, difficulty: str, num_questions: int, context_text: str) -> str:
+    def get_quiz_prompt(self, topic: str, difficulty: str, num_questions: int, context_text: str) -> str:
         return f"""
         Eres un experto en formación ISO 9001. Genera un examen de opción múltiple.
         Tema: {topic}
@@ -75,8 +71,19 @@ Contexto: {context}"""
         }}
         """
 
-    @staticmethod
-    def get_classification_prompt(query: str) -> str:
+    def get_context_summary_prompt(self, context_text: str) -> str:
+        return (
+            "Actúa como un Auditor Líder ISO 9001. "
+            "Analiza los siguientes fragmentos de documentación cargados en el sistema y genera un 'Resumen Ejecutivo del Contexto'.\n"
+            "Tu respuesta debe estar estructurada en Markdown y cubrir:\n"
+            "- **Documentación Identificada**: Lista breve de los tipos de documentos detectados (procedimientos, políticas, registros, etc.).\n"
+            "- **Alcance Temático**: Principales temas o procesos que cubren estos documentos.\n"
+            "- **Observaciones Preliminares**: Cualquier punto destacable sobre la estructura o contenido (o falta de él).\n\n"
+            "Sé profesional, directo y conciso.\n\n"
+            f"CONTEXTO DISPONIBLE:\n{context_text}"
+        )
+
+    def get_classification_prompt(self, query: str) -> str:
         return f"""Eres un clasificador de preguntas experto. Tu tarea es analizar la siguiente pregunta y clasificarla en una de estas tres categorías ÚNICAMENTE:
 
 PRECISION: Si la pregunta solicita:

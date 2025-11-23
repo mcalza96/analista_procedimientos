@@ -6,8 +6,9 @@ from core.interfaces.llm_provider import LLMProvider
 from core.interfaces.vector_store import VectorStoreRepository
 from core.interfaces.document_loader import DocumentLoaderRepository
 from core.interfaces.router import RouterRepository
-from core.domain.models import ChatResponse, SourceDocument, LLMProviderError
+from core.domain.models import ChatResponse, SourceDocument, LLMProviderError, RouteType
 from core.services.prompt_manager import PromptManager
+from config.settings import settings
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,29 +23,22 @@ class ChatService:
         llm_provider: LLMProvider, 
         vector_store_repo: VectorStoreRepository,
         document_loader: DocumentLoaderRepository,
-        router_repo: RouterRepository
+        router_repo: RouterRepository,
+        prompt_manager: PromptManager
     ):
         self.llm_provider = llm_provider
         self.vector_store_repo = vector_store_repo
         self.document_loader = document_loader
         self.router_repo = router_repo
+        self.prompt_manager = prompt_manager
         self.vector_store = None
         self.bm25_retriever = None
         # Inicializamos Reranker Multilingüe Ligero
         try:
-            self.reranker = CrossEncoder('cross-encoder/mmarco-mMiniLM-v2-L12-H384-v1')
+            self.reranker = CrossEncoder(settings.RERANKER_MODEL)
         except Exception as e:
             logger.warning(f"Error cargando reranker: {e}")
             self.reranker = None
-
-    def process_uploaded_files(self, file_paths: List[str]) -> None:
-        """Procesa archivos subidos y crea la base de datos vectorial."""
-        chunks = self.document_loader.load_documents(file_paths)
-        self.vector_store, self.bm25_retriever = self.vector_store_repo.create_vector_db(chunks)
-
-    def load_existing_db(self) -> None:
-        """Carga una base de datos vectorial existente vacía o por defecto."""
-        self.vector_store, self.bm25_retriever = self.vector_store_repo.create_vector_db([])
 
     def _rerank_documents(self, query: str, docs: List[Document]) -> List[Document]:
         """
@@ -55,7 +49,7 @@ class ChatService:
             docs: Lista de documentos recuperados inicialmente.
             
         Returns:
-            List[Document]: Top 5 documentos más relevantes reordenados.
+            List[Document]: Top K documentos más relevantes reordenados.
         """
         if not docs:
             return []
@@ -69,7 +63,7 @@ class ChatService:
                 seen_content.add(doc.page_content)
         
         if not unique_docs or not self.reranker:
-            return unique_docs[:5]
+            return unique_docs[:settings.RERANKER_TOP_K]
 
         # Preparar pares para el CrossEncoder
         pairs = [[query, doc.page_content] for doc in unique_docs]
@@ -84,8 +78,8 @@ class ChatService:
         # Ordenar por score descendente
         scored_docs = sorted(unique_docs, key=lambda x: x.metadata.get('score', 0), reverse=True)
         
-        # Retornar top 5
-        return scored_docs[:5]
+        # Retornar top K
+        return scored_docs[:settings.RERANKER_TOP_K]
 
     def _retrieve_documents(self, query: str) -> Tuple[List[SourceDocument], str]:
         """
@@ -135,26 +129,32 @@ class ChatService:
             # Paso 1: Routing
             if route is None:
                 route = self.router_repo.route_query(query)
-                
+            
+            # Normalize route to Enum if it's a string (for backward compatibility or router output)
+            try:
+                route_enum = RouteType(route)
+            except ValueError:
+                route_enum = RouteType.CHAT # Default fallback
+
             # Paso 2: Retrieval & Logic based on route
-            if route == "CHAT":
-                prompt = PromptManager.get_chat_prompt(query)
+            if route_enum == RouteType.CHAT:
+                prompt = self.prompt_manager.get_chat_prompt(query)
                 response_text = self.llm_provider.generate_response(prompt)
-                return ChatResponse(answer=response_text, route=route)
+                return ChatResponse(answer=response_text, route=route_enum)
                 
             # For other routes (ANALYSIS, WALKTHROUGH, PRECISION), we need context
             source_docs, context_str = self._retrieve_documents(query)
             
             if not context_str:
-                 return ChatResponse(answer="Por favor, carga documentos primero.", route="ERROR")
+                 return ChatResponse(answer="Por favor, carga documentos primero.", route=RouteType.ERROR)
 
             # Paso 3: Prompting
-            if route == "ANALYSIS":
-                prompt = PromptManager.get_audit_prompt(context_str)
-            elif route == "WALKTHROUGH":
-                prompt = PromptManager.get_walkthrough_prompt(context_str)
+            if route_enum == RouteType.ANALYSIS:
+                prompt = self.prompt_manager.get_audit_prompt(context_str)
+            elif route_enum == RouteType.WALKTHROUGH:
+                prompt = self.prompt_manager.get_walkthrough_prompt(context_str)
             else: # PRECISION
-                prompt = PromptManager.get_precision_prompt(context_str)
+                prompt = self.prompt_manager.get_precision_prompt(context_str)
                 
             full_prompt = f"{prompt}\n\nPregunta: {query}"
 
@@ -165,16 +165,16 @@ class ChatService:
             return ChatResponse(
                 answer=response_text,
                 source_documents=source_docs,
-                route=route
+                route=route_enum
             )
         
         except LLMProviderError as e:
             logger.error(f"LLM Provider Error: {e}")
-            return ChatResponse(answer="Lo siento, hubo un problema de comunicación con el modelo de IA. Por favor intenta de nuevo más tarde.", route="ERROR")
+            return ChatResponse(answer="Lo siento, hubo un problema de comunicación con el modelo de IA. Por favor intenta de nuevo más tarde.", route=RouteType.ERROR)
             
         except Exception as e:
             logger.error(f"Error en ChatService.get_response: {e}")
-            return ChatResponse(answer=f"Ocurrió un error procesando tu solicitud: {str(e)}", route="ERROR")
+            return ChatResponse(answer=f"Ocurrió un error procesando tu solicitud: {str(e)}", route=RouteType.ERROR)
 
     def get_streaming_response(self, query: str, chat_history: List[Any], route: str = None) -> Tuple[Generator[str, None, None], List[SourceDocument], str]:
         """
@@ -187,27 +187,32 @@ class ChatService:
             # Paso 1: Routing
             if route is None:
                 route = self.router_repo.route_query(query)
-                
+            
+            try:
+                route_enum = RouteType(route)
+            except ValueError:
+                route_enum = RouteType.CHAT
+
             # Paso 2: Retrieval & Logic based on route
-            if route == "CHAT":
-                prompt = PromptManager.get_chat_prompt(query)
+            if route_enum == RouteType.CHAT:
+                prompt = self.prompt_manager.get_chat_prompt(query)
                 generator = self.llm_provider.generate_stream(prompt)
-                return generator, [], route
+                return generator, [], route_enum
                 
             # For other routes (ANALYSIS, WALKTHROUGH, PRECISION), we need context
             source_docs, context_str = self._retrieve_documents(query)
             
             if not context_str:
                  def error_gen(): yield "Por favor, carga documentos primero."
-                 return error_gen(), [], "ERROR"
+                 return error_gen(), [], RouteType.ERROR
 
             # Paso 3: Prompting
-            if route == "ANALYSIS":
-                prompt = PromptManager.get_audit_prompt(context_str)
-            elif route == "WALKTHROUGH":
-                prompt = PromptManager.get_walkthrough_prompt(context_str)
+            if route_enum == RouteType.ANALYSIS:
+                prompt = self.prompt_manager.get_audit_prompt(context_str)
+            elif route_enum == RouteType.WALKTHROUGH:
+                prompt = self.prompt_manager.get_walkthrough_prompt(context_str)
             else: # PRECISION
-                prompt = PromptManager.get_precision_prompt(context_str)
+                prompt = self.prompt_manager.get_precision_prompt(context_str)
                 
             full_prompt = f"{prompt}\n\nPregunta: {query}"
 
@@ -215,15 +220,51 @@ class ChatService:
             generator = self.llm_provider.generate_stream(full_prompt)
 
             # Paso 5: Return Generator and Sources
-            return generator, source_docs, route
+            return generator, source_docs, route_enum
         
         except LLMProviderError as e:
             logger.error(f"LLM Provider Error: {e}")
             def error_gen(): yield "Lo siento, hubo un problema de comunicación con el modelo de IA. Por favor intenta de nuevo más tarde."
-            return error_gen(), [], "ERROR"
+            return error_gen(), [], RouteType.ERROR
             
         except Exception as e:
             logger.error(f"Error en ChatService.get_streaming_response: {e}")
             def error_gen(): yield f"Ocurrió un error procesando tu solicitud: {str(e)}"
-            return error_gen(), [], "ERROR"
+            return error_gen(), [], RouteType.ERROR
+    
+    def generate_context_summary(self) -> str:
+        """
+        Genera un resumen ejecutivo del contexto actual almacenado en la base vectorial.
+        Utiliza una búsqueda amplia para obtener una muestra representativa del contenido.
+        """
+        if not self.vector_store:
+            return "No hay contexto disponible para analizar. Por favor carga documentos primero."
+            
+        try:
+            # 1. Recuperar una muestra amplia de documentos
+            # Aumentamos k para tener más contexto y reducimos el riesgo de perder info clave
+            # Usamos una query que busque estructura documental
+            docs = self.vector_store.similarity_search(
+                "objetivo alcance definiciones responsabilidades procedimiento", 
+                k=15
+            )
+            
+            if not docs:
+                return "La base de conocimiento está vacía."
+                
+            # 2. Combinar contenido (Aumentamos límite de caracteres por chunk)
+            # 1000 chars por chunk * 15 chunks = ~15k chars, manejable para modelos modernos
+            context_text = "\n\n".join([
+                f"--- Fragmento ({d.metadata.get('source_file', 'unknown')}) ---\n{d.page_content[:1000]}..." 
+                for d in docs
+            ])
+            
+            # 3. Prompt para el LLM
+            prompt = self.prompt_manager.get_context_summary_prompt(context_text)
+            
+            return self.llm_provider.generate_response(prompt)
+            
+        except Exception as e:
+            logger.error(f"Error generando resumen de contexto: {e}")
+            return f"No se pudo generar el resumen del contexto debido a un error: {str(e)}"
 

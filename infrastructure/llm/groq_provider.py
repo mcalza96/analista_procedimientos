@@ -19,7 +19,7 @@ class GroqProvider(LLMProvider):
         self.llm = ChatGroq(
             groq_api_key=settings.GROQ_API_KEY,
             model_name=settings.MODEL_NAME,
-            temperature=0.1
+            temperature=settings.LLM_TEMPERATURE
         )
 
     def generate_response(self, prompt: str) -> str:
